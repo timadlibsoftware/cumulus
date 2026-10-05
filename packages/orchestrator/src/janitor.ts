@@ -40,7 +40,7 @@ export class GitHubBranchJanitor implements WorkspaceJanitor {
     private readonly index: KeyIndex,
   ) {}
 
-  async cleanupIssue(_issue: Issue, key: string): Promise<void> {
+  async cleanupIssue(_issue: Issue, key: string, _config?: ServiceConfig): Promise<void> {
     const branch = branchName(key);
     for (const repo of await this.github.listRepos()) {
       if ((await this.github.branches(repo, branch)).includes(branch))
