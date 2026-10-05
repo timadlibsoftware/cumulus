@@ -80,6 +80,39 @@ helm lint chart && helm template chart | kubeconform -strict -summary -ignore-mi
 Run all of them before every commit. Postgres tests use Testcontainers and need Docker. They skip,
 and report themselves as skipped, when Docker is unavailable.
 
+## UI (`packages/ui`)
+
+Vue 3 + Vite + PrimeVue 4 (Aura preset) + Tailwind 4 (`tailwindcss-primeui`), shell taken from the
+free Sakai template (layout SCSS in `src/assets/layout/`, trimmed). Tests: Vitest + @vue/test-utils
+on jsdom.
+
+```bash
+pnpm --filter @cumulus/ui dev        # Vite dev server; proxies /api and /auth to 127.0.0.1:8080
+pnpm --filter @cumulus/ui test       # vitest run
+pnpm --filter @cumulus/ui typecheck  # vue-tsc --noEmit
+pnpm --filter @cumulus/ui build      # writes packages/orchestrator/public (gitignored, emptied)
+```
+
+```
+src/main.ts              PrimeVue (darkModeSelector '.app-dark'), router, global styles
+src/router.ts            `sections`: the single list behind routes and the sidebar menu
+src/api.ts               Only place that calls fetch. 401 -> /auth/login?returnTo=<path>
+src/format.ts            Date, number, duration formatting
+src/composables/         useTheme (System/Light/Dark), useLiveState (SSE + polling fallback)
+src/layout/              Sakai shell: AppLayout, AppTopbar, AppSidebar, AppMenu, useLayout
+src/views/               One view per section
+test/                    *.test.ts; helpers.ts mounts with PrimeVue (theme 'none') + memory router
+```
+
+- **Theme:** `useTheme()` is the only code that touches the `app-dark` class on `<html>`. Modes are
+  `system` (default, follows `prefers-color-scheme` live), `light`, `dark`; stored in localStorage
+  key `cumulus.theme`. All storage access is wrapped in try/catch.
+- **API types** come from `@cumulus/shared` via `import type`. Components never call `fetch`
+  directly; add a method to `api` with a test instead.
+- **Live data:** `useLiveState()` owns the single EventSource on `/api/v1/events` and stops with
+  its component. On SSE error it closes the stream and polls `/api/v1/state` every 10s.
+- `.vue` files are formatted by Prettier but not linted by ESLint; `vue-tsc` type-checks them.
+
 ## Conventions
 
 - TypeScript, ESM, `strict`. Import type-only symbols with `import type`.
