@@ -53,7 +53,7 @@ export class MemoryTracker implements Tracker {
     return [];
   }
 
-  async executeAgentTool(name: string): Promise<ToolResult> {
+  async executeAgentTool(name: string, _args: unknown, _context: { issue: Issue }): Promise<ToolResult> {
     return unsupportedTool(name);
   }
 }
