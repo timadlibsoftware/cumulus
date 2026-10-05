@@ -1,0 +1,103 @@
+name: Build and Deploy Orchestrator
+
+# Image changes only. Chart-only changes (chart/**) need no image: ArgoCD syncs the chart from main.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - packages/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .dockerignore
+      - .github/workflows/build-and-deploy-orchestrator.yml
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: build-and-deploy-orchestrator-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/build-and-test.yml
+
+  build-and-push:
+    needs: [test]
+    name: Build and Push Orchestrator Image
+    runs-on: self-hosted-linux
+    env:
+      IMAGE_NAME: agents/cumulus
+      IMAGE_TAG_IMMUTABLE: ${{ github.run_id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # scripts/set-chart-value.mjs needs Node on the self-hosted runner.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Log in to Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        env:
+          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+        run: az acr login --name "${ACR_LOGIN_SERVER%%.azurecr.io}"
+
+      - name: Build image
+        run: |
+          docker build -f packages/orchestrator/Dockerfile \
+            -t "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${IMAGE_TAG_IMMUTABLE}" \
+            .
+
+      - name: Push immutable image tag
+        run: docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${IMAGE_TAG_IMMUTABLE}"
+
+      - name: Push SHA alias tag
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          docker tag "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${IMAGE_TAG_IMMUTABLE}" \
+            "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:sha-${SHORT_SHA}"
+          docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:sha-${SHORT_SHA}"
+
+      - name: Push convenience tag (main only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker tag "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${IMAGE_TAG_IMMUTABLE}" \
+            "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:latest"
+          docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:latest"
+
+      # ADR-0003 CD exception: commit the new run ID; ArgoCD auto-syncs it from main.
+      - name: Commit orchestrator image tag
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main
+            node scripts/set-chart-value.mjs chart/values.yaml image.tag "${IMAGE_TAG_IMMUTABLE}"
+            if git diff --quiet chart/values.yaml; then
+              echo "Chart already at ${IMAGE_TAG_IMMUTABLE}."
+              exit 0
+            fi
+            git add chart/values.yaml
+            git commit -m "chore: update cumulus image tag"
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            echo "Push attempt ${i} failed, retrying..."
+            git reset --hard HEAD~1
+          done
+          echo "Failed to push after 5 attempts."
+          exit 1

@@ -1,0 +1,109 @@
+name: Build and Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Reused as the gate in front of the image build workflows.
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  HELM_VERSION: v4.3.0
+  HELM_UNITTEST_VERSION: v1.2.1
+  KUBECONFORM_VERSION: v0.8.0
+  CRD_SCHEMAS: https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+
+jobs:
+  node:
+    name: Lint, Typecheck and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run linters
+        run: pnpm lint
+
+      - name: Run type checks
+        run: pnpm typecheck
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Build UI
+        run: pnpm --filter @cumulus/ui build
+
+  helm:
+    name: Validate Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubeconform and helm-unittest
+        run: |
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin kubeconform
+          helm plugin install https://github.com/helm-unittest/helm-unittest --version "${HELM_UNITTEST_VERSION}" --verify=false
+
+      - name: Lint chart
+        run: helm lint chart --strict
+
+      - name: Validate rendered manifests
+        run: |
+          helm template cumulus chart --namespace agents \
+            | kubeconform -strict -summary -schema-location default -schema-location "${CRD_SCHEMAS}"
+
+      - name: Run chart unit tests
+        run: helm unittest chart
+
+      - name: Validate ArgoCD application
+        run: kubeconform -strict -summary -schema-location default -schema-location "${CRD_SCHEMAS}" deploy/argocd
+
+  worker-scripts:
+    name: Test Worker Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run shellcheck
+        run: shellcheck worker/entrypoint.sh worker/bin/* worker/test/smoke.sh
+
+      - name: Run bats tests
+        run: pnpm test:scripts
+
+      - name: Run converter tests
+        run: pnpm --filter @cumulus/worker-convert test

@@ -71,8 +71,10 @@ chart/                   Helm chart for the `agents` namespace on cloudops-prod
   tests/                 helm-unittest suites
 scripts/                 CI helpers (set-chart-value.mjs) + bats tests
 deploy/argocd/           ArgoCD Application to copy into aks-gitops
+.github/workflows/       build-and-test, build-and-deploy-orchestrator, build-worker-image
 docs/spec/               Upstream spec copy + CUMULUS-SPEC.md
 docs/adapters/           Tracker adapter profiles (required by upstream §11.2)
+docs/deploy.md           One-time infrastructure prerequisites and first deploy
 WORKFLOW.md              Default workflow: DevOps backlog, OpenCode runner
 ```
 
@@ -165,8 +167,14 @@ test/                    *.test.ts; helpers.ts mounts with PrimeVue (theme 'none
 
 - ArgoCD (`deploy/argocd/cumulus.yaml`, copied into aks-gitops) auto-syncs `chart/` from `main`
   into namespace `agents` as release `cumulus`.
+- `build-and-deploy-orchestrator.yml` (packages and lockfile changes) and `build-worker-image.yml`
+  (`worker/**`) run `build-and-test.yml` first, push `<run_id>`, `sha-<7>` and `latest` to
+  `adlibcloudops.azurecr.io/agents/{cumulus,cumulus-worker}`, then commit the run ID to
+  `image.tag` / `worker.image.tag` with `scripts/set-chart-value.mjs`. Chart-only changes build no
+  image.
 - Worker tool versions are `ARG`s in `worker/Dockerfile`; `worker/test/smoke.sh` reads them back,
-  so bump only the ARG. CloudOps-Skills is pinned by `CLOUDOPS_SKILLS_REF`; the build prints
-  `/opt/cumulus/UNMAPPED.md` (features OpenCode cannot use; file issues).
+  so bump only the ARG. CloudOps-Skills is pinned by `CLOUDOPS_SKILLS_REF`; the build prints and the
+  workflow summary shows `/opt/cumulus/UNMAPPED.md` (features OpenCode cannot use; file issues).
 - The worker entrypoint contract (env names, exit 70 for setup and hook failures) is documented at
   the top of `worker/entrypoint.sh`; the executor that builds worker pods must match it.
+- One-time Azure, GitHub and Key Vault setup: `docs/deploy.md`.

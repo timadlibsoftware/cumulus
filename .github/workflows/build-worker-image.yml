@@ -1,0 +1,130 @@
+name: Build Worker Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - worker/**
+      - .github/workflows/build-worker-image.yml
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: build-worker-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/build-and-test.yml
+
+  build-and-push:
+    needs: [test]
+    name: Build and Push Worker Image
+    runs-on: self-hosted-linux
+    env:
+      IMAGE_NAME: agents/cumulus-worker
+      IMAGE_TAG_IMMUTABLE: ${{ github.run_id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # scripts/set-chart-value.mjs needs Node on the self-hosted runner.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Resolve CloudOps-Skills commit
+        id: skills
+        run: echo "ref=$(sed -n 's/^ARG CLOUDOPS_SKILLS_REF=//p' worker/Dockerfile)" >> "$GITHUB_OUTPUT"
+
+      # cloudops-skills is private: read it with the cumulus GitHub App (docs/deploy.md).
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.CUMULUS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.CUMULUS_GITHUB_APP_PRIVATE_KEY }}
+          owner: Adlibsoftware
+          repositories: cloudops-skills
+          permission-contents: read
+
+      - name: Checkout CloudOps-Skills
+        uses: actions/checkout@v7
+        with:
+          repository: Adlibsoftware/cloudops-skills
+          ref: ${{ steps.skills.outputs.ref }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: .build/cloudops-skills
+          persist-credentials: false
+
+      - name: Log in to Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        env:
+          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+        run: az acr login --name "${ACR_LOGIN_SERVER%%.azurecr.io}"
+
+      - name: Build image
+        run: |
+          docker buildx build --load \
+            --build-context cloudops-skills=.build/cloudops-skills \
+            -t "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${IMAGE_TAG_IMMUTABLE}" \
+            worker
+
+      - name: Run smoke tests
+        run: worker/test/smoke.sh "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${IMAGE_TAG_IMMUTABLE}"
+
+      - name: Report unmapped CloudOps-Skills features
+        run: |
+          docker run --rm --entrypoint cat "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${IMAGE_TAG_IMMUTABLE}" \
+            /opt/cumulus/UNMAPPED.md | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Push immutable image tag
+        run: docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${IMAGE_TAG_IMMUTABLE}"
+
+      - name: Push SHA alias tag
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          docker tag "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${IMAGE_TAG_IMMUTABLE}" \
+            "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:sha-${SHORT_SHA}"
+          docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:sha-${SHORT_SHA}"
+
+      - name: Push convenience tag (main only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker tag "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${IMAGE_TAG_IMMUTABLE}" \
+            "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:latest"
+          docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:latest"
+
+      - name: Commit worker image tag
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main
+            node scripts/set-chart-value.mjs chart/values.yaml worker.image.tag "${IMAGE_TAG_IMMUTABLE}"
+            if git diff --quiet chart/values.yaml; then
+              echo "Chart already at ${IMAGE_TAG_IMMUTABLE}."
+              exit 0
+            fi
+            git add chart/values.yaml
+            git commit -m "chore: update cumulus-worker image tag"
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            echo "Push attempt ${i} failed, retrying..."
+            git reset --hard HEAD~1
+          done
+          echo "Failed to push after 5 attempts."
+          exit 1
