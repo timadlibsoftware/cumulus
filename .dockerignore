@@ -1,0 +1,13 @@
+# Build context for packages/orchestrator/Dockerfile (repository root).
+.git
+**/node_modules
+**/dist
+**/coverage
+packages/orchestrator/public
+chart
+deploy
+docs
+.github
+# worker/convert is a workspace member: keep its package.json so the frozen lockfile matches.
+worker/*
+!worker/convert/package.json

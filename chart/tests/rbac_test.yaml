@@ -1,0 +1,92 @@
+suite: service accounts and RBAC
+templates:
+  - serviceaccounts.yaml
+  - rbac.yaml
+release:
+  name: cumulus
+  namespace: agents
+values:
+  - ./values/ids.yaml
+tests:
+  - it: orchestrator SA carries its workload identity client id
+    template: serviceaccounts.yaml
+    documentSelector:
+      path: metadata.name
+      value: cumulus
+    asserts:
+      - equal:
+          path: metadata.annotations["azure.workload.identity/client-id"]
+          value: 00000000-0000-0000-0000-000000000001
+
+  - it: C-3 agent SA has its own workload identity and no API token
+    template: serviceaccounts.yaml
+    documentSelector:
+      path: metadata.name
+      value: cumulus-agent
+    asserts:
+      - equal:
+          path: metadata.annotations["azure.workload.identity/client-id"]
+          value: 00000000-0000-0000-0000-000000000002
+      - equal:
+          path: automountServiceAccountToken
+          value: false
+
+  - it: C-3 Role grants exactly the Job, pod, attach, log and event verbs
+    template: rbac.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cumulus
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [batch]
+              resources: [jobs]
+              verbs: [create, get, list, watch, delete]
+            - apiGroups: ['']
+              resources: [pods]
+              verbs: [get, list, watch, delete]
+            - apiGroups: ['']
+              resources: [pods/attach]
+              verbs: [create, get]
+            - apiGroups: ['']
+              resources: [pods/log]
+              verbs: [get]
+            - apiGroups: ['']
+              resources: [events]
+              verbs: [list, watch]
+
+  - it: C-3 binds the Role to the orchestrator SA only
+    template: rbac.yaml
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: cumulus
+              namespace: agents
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: cumulus
+
+  - it: C-3 renders no other RBAC objects, so cumulus-agent stays unbound
+    template: rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - notContains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: cumulus-agent
+            namespace: agents
+          any: true

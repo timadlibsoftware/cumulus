@@ -59,6 +59,7 @@ packages/orchestrator/   Fastify service (Node 24 LTS)
   src/http/              /api/v1/*, SSE, Entra OIDC, static UI
   test/                  Vitest tests; test/contracts/ holds shared contract suites
 packages/ui/             Vue 3 + Vite + PrimeVue (Sakai) SPA, built into the orchestrator's public/
+packages/orchestrator/Dockerfile  Orchestrator image (context: repo root, see .dockerignore)
 worker/                  Agent worker image (Ubuntu 24.04), context: worker/
   Dockerfile             Pinned tools (ARGs, Renovate-annotated), tini PID 1, user agent (10001)
   entrypoint.sh          Workspace + hooks + agent + after_run; stdout belongs to the agent only
@@ -67,11 +68,16 @@ worker/                  Agent worker image (Ubuntu 24.04), context: worker/
   mcp-pins.json          npx MCP packages installed globally at fixed versions
   test/                  bats tests + smoke.sh (runs against a built image)
 chart/                   Helm chart for the `agents` namespace on cloudops-prod
+  tests/                 helm-unittest suites
 scripts/                 CI helpers (set-chart-value.mjs) + bats tests
+deploy/argocd/           ArgoCD Application to copy into aks-gitops
 docs/spec/               Upstream spec copy + CUMULUS-SPEC.md
 docs/adapters/           Tracker adapter profiles (required by upstream §11.2)
 WORKFLOW.md              Default workflow: DevOps backlog, OpenCode runner
 ```
+
+The deployed default workflow lives in `chart/values.yaml` (`workflow:`) and is mounted at
+`/config/WORKFLOW.md`.
 
 ## Commands
 
@@ -82,7 +88,11 @@ pnpm typecheck
 pnpm lint                      # eslint + prettier --check
 pnpm --filter @cumulus/ui build
 pnpm test:scripts              # bats: worker entrypoint, token helpers, scripts/ (needs jq)
-helm lint chart && helm template chart | kubeconform -strict -summary -ignore-missing-schemas
+helm lint chart --strict
+helm template cumulus chart --namespace agents | kubeconform -strict -summary \
+  -schema-location default \
+  -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+helm unittest chart            # plugin: helm plugin install https://github.com/helm-unittest/helm-unittest
 ```
 
 Run all of them before every commit. For worker image changes also build it and run the smoke test
@@ -153,6 +163,8 @@ test/                    *.test.ts; helpers.ts mounts with PrimeVue (theme 'none
 
 ## Deploy
 
+- ArgoCD (`deploy/argocd/cumulus.yaml`, copied into aks-gitops) auto-syncs `chart/` from `main`
+  into namespace `agents` as release `cumulus`.
 - Worker tool versions are `ARG`s in `worker/Dockerfile`; `worker/test/smoke.sh` reads them back,
   so bump only the ARG. CloudOps-Skills is pinned by `CLOUDOPS_SKILLS_REF`; the build prints
   `/opt/cumulus/UNMAPPED.md` (features OpenCode cannot use; file issues).

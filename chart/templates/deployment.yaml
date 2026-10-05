@@ -1,0 +1,107 @@
+{{- $drainMs := regexFind "drain_timeout_ms:[ ]*[0-9]+" .Values.workflow | regexFind "[0-9]+$" | default "300000" | int -}}
+{{- if gt $drainMs (mul .Values.drainTimeoutSeconds 1000) -}}
+{{- fail (printf "WORKFLOW.md shutdown.drain_timeout_ms (%d) exceeds drainTimeoutSeconds (%d s); raise drainTimeoutSeconds" $drainMs (int .Values.drainTimeoutSeconds)) -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cumulus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cumulus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orchestrator
+spec:
+  # C-4: a single instance; Recreate so two orchestrators never overlap.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "cumulus.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cumulus.selectorLabels" . | nindent 8 }}
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: cumulus
+      # The orchestrator creates and attaches to worker Jobs through the Kubernetes API.
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: {{ add .Values.drainTimeoutSeconds 30 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: orchestrator
+          image: {{ include "cumulus.image" (list "orchestrator" .Values.image) | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["/config/WORKFLOW.md", "--port", "8080", "--host", "0.0.0.0"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CUMULUS_WORKER_IMAGE
+              value: {{ include "cumulus.image" (list "worker" .Values.worker.image) | quote }}
+            - name: CUMULUS_PUBLIC_URL
+              value: {{ .Values.publicUrl | quote }}
+            - name: CUMULUS_INTERNAL_URL
+              value: {{ printf "http://cumulus.%s.svc.cluster.local:8080" .Release.Namespace | quote }}
+            - name: CUMULUS_DB_HOST
+              value: {{ .Values.db.host | quote }}
+            - name: CUMULUS_DB_NAME
+              value: {{ .Values.db.name | quote }}
+            - name: CUMULUS_DB_USER
+              value: {{ .Values.db.user | quote }}
+            - name: CUMULUS_OIDC_ISSUER
+              value: {{ .Values.oidc.issuer | quote }}
+            - name: CUMULUS_OIDC_CLIENT_ID
+              value: {{ .Values.oidc.clientId | quote }}
+          # CUMULUS_OIDC_CLIENT_SECRET, CUMULUS_SESSION_SECRET, CUMULUS_GITHUB_APP_ID,
+          # CUMULUS_GITHUB_APP_PRIVATE_KEY (externalsecrets.yaml).
+          envFrom:
+            - secretRef:
+                name: cumulus
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            # Whole-directory mount (no subPath) so WORKFLOW.md edits reach the pod and are
+            # picked up by the §6.2 dynamic reload without a restart.
+            - name: workflow
+              mountPath: /config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workflow
+          configMap:
+            name: cumulus-workflow
+        - name: tmp
+          emptyDir: {}

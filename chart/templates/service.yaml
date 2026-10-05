@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cumulus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cumulus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orchestrator
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "cumulus.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

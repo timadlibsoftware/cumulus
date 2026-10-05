@@ -1,0 +1,172 @@
+suite: orchestrator deployment
+templates:
+  - deployment.yaml
+release:
+  name: cumulus
+  namespace: agents
+values:
+  - ./values/ids.yaml
+tests:
+  - it: C-4 runs exactly one replica with the Recreate strategy
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.strategy
+          value:
+            type: Recreate
+
+  - it: C-4 grace period covers the drain window plus 30 seconds
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 330
+
+  - it: C-4 grace period follows drainTimeoutSeconds
+    set:
+      drainTimeoutSeconds: 600
+      workflow: |
+        ---
+        shutdown:
+          drain_timeout_ms: 600000
+        ---
+        prompt
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 630
+
+  - it: C-4 fails when WORKFLOW.md drains longer than the pod grace period allows
+    set:
+      drainTimeoutSeconds: 60
+    asserts:
+      - failedTemplate:
+          errorPattern: drain_timeout_ms
+
+  - it: uses the immutable image tag and rejects latest
+    set:
+      image.tag: '12345'
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: adlibcloudops.azurecr.io/agents/cumulus:12345
+
+  - it: refuses a mutable image tag
+    set:
+      image.tag: latest
+    asserts:
+      - failedTemplate:
+          errorPattern: immutable
+
+  - it: C-8 starts the orchestrator on 0.0.0.0:8080 with the mounted WORKFLOW.md
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: ['/config/WORKFLOW.md', '--port', '8080', '--host', '0.0.0.0']
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: workflow
+            mountPath: /config
+            readOnly: true
+
+  - it: C-8 probes /healthz for liveness and /readyz for readiness
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+
+  - it: runs as the cumulus SA with workload identity and the K8s API token
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: cumulus
+      - equal:
+          path: spec.template.metadata.labels["azure.workload.identity/use"]
+          value: 'true'
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+
+  - it: C-4 orchestrator pods never carry the worker orphan-cleanup label
+    asserts:
+      - notEqual:
+          path: spec.template.metadata.labels["app.kubernetes.io/managed-by"]
+          value: cumulus
+
+  - it: C-3 passes the worker image and namespace to the orchestrator
+    set:
+      worker.image.tag: '777'
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CUMULUS_WORKER_IMAGE
+            value: adlibcloudops.azurecr.io/agents/cumulus-worker:777
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+
+  - it: sets the URL, database and OIDC environment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: CUMULUS_PUBLIC_URL, value: 'https://cumulus.adlibsys.com' }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: CUMULUS_INTERNAL_URL, value: 'http://cumulus.agents.svc.cluster.local:8080' }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: CUMULUS_DB_HOST, value: adlib-cloudops-prod-psql.postgres.database.azure.com }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: CUMULUS_DB_NAME, value: cumulus }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: CUMULUS_DB_USER, value: cumulus-orchestrator-uami }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CUMULUS_OIDC_ISSUER
+            value: https://login.microsoftonline.com/1f1e770e-6128-4714-af02-24b32d8690c9/v2.0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: CUMULUS_OIDC_CLIENT_ID, value: 00000000-0000-0000-0000-00000000000a }
+
+  - it: takes the orchestrator secrets from the cumulus Secret
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: cumulus
+
+  - it: runs non-root with a read-only root filesystem and a writable /tmp
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tmp
+            mountPath: /tmp
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tmp
+            emptyDir: {}

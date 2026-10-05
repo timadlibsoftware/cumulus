@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cumulus-workflow
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cumulus.labels" . | nindent 4 }}
+data:
+  WORKFLOW.md: |
+    {{- .Values.workflow | nindent 4 }}

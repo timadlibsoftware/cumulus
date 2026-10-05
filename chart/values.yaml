@@ -1,0 +1,122 @@
+# Cumulus chart values. Deployed by ArgoCD (auto-sync from main) as release `cumulus` in `agents`.
+
+image:
+  repository: adlibcloudops.azurecr.io/agents/cumulus
+  # Immutable GITHUB_RUN_ID tag (ADR-0003), committed by build-and-deploy-orchestrator on main.
+  # renovate: datasource=docker depName=adlibcloudops.azurecr.io/agents/cumulus versioning=loose
+  tag: '0'
+
+worker:
+  image:
+    repository: adlibcloudops.azurecr.io/agents/cumulus-worker
+    # Immutable GITHUB_RUN_ID tag (ADR-0003), committed by build-worker-image on main.
+    # renovate: datasource=docker depName=adlibcloudops.azurecr.io/agents/cumulus-worker versioning=loose
+    tag: '0'
+
+# C-4 drain window. Must be >= WORKFLOW.md shutdown.drain_timeout_ms / 1000; the pod gets 30s more.
+drainTimeoutSeconds: 300
+
+publicUrl: https://cumulus.adlibsys.com
+ingress:
+  host: cumulus.adlibsys.com
+
+db:
+  host: adlib-cloudops-prod-psql.postgres.database.azure.com
+  name: cumulus
+  # Entra principal name of the orchestrator managed identity (C-5, Entra auth).
+  user: cumulus-orchestrator-uami
+
+oidc:
+  issuer: https://login.microsoftonline.com/1f1e770e-6128-4714-af02-24b32d8690c9/v2.0
+  # Entra app registration `cumulus` (docs/deploy.md). Set after the app is created.
+  clientId: ''
+
+workloadIdentity:
+  # Client IDs of the user-assigned managed identities (docs/deploy.md). Set after tf-org apply.
+  orchestratorClientId: ''
+  agentClientId: ''
+
+externalSecrets:
+  # Canonical Go duration: the API normalizes 1h -> 1h0m0s on create.
+  refreshInterval: 1h0m0s
+  clusterSecretStore: adlib-aks-kv
+
+# Env vars for agent pods, from Key Vault into Secret `cumulus-agent-env` (C-3 worker.env_secret).
+agentEnv:
+  - name: LITELLM_API_KEY
+    key: CumulusLitellmKey
+  - name: ANTHROPIC_API_KEY
+    key: CumulusAnthropicKey
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: '1'
+    memory: 1Gi
+
+# WORKFLOW.md served to the orchestrator at /config/WORKFLOW.md. Rendered verbatim: the Liquid
+# prompt below is evaluated by the orchestrator per issue (variables: issue, attempt, cumulus).
+workflow: |
+  ---
+  tracker:
+    kind: azure_devops
+    provider:
+      organization: adlibsoftware
+      project: AdlibCTP
+      team: DevOps
+      board: Stories
+      area_path: 'AdlibCTP\DevOps'
+      iteration_path: 'AdlibCTP\Backlogs\DevOps'
+      agent_columns: [Dev, Test, Review]
+    required_labels: [cumulus]
+    active_states: [Backlog, Dev, Test]
+    terminal_states: [Closed]
+  polling:
+    interval_ms: 30000
+  agent:
+    max_concurrent_agents: 5
+  runner:
+    kind: opencode
+  worker:
+    executor: kubernetes
+  shutdown:
+    drain_timeout_ms: 300000
+  ---
+  You are Cumulus, an autonomous engineer on Adlib's CloudOps team. You are working on Azure DevOps
+  work item {{ issue.identifier }}: {{ issue.title }}
+
+  - Link: {{ issue.url }}
+  - Board column: {{ issue.state }}
+  - Tags: {{ issue.labels | join: ", " }}
+  {% if attempt %}
+  This is attempt {{ attempt }}. An earlier attempt may already have pushed work; continue from it
+  instead of starting over.
+  {% endif %}
+
+  ## Work item description
+
+  {{ issue.description }}
+
+  ## How to work
+
+  1. Decide which repositories in the `Adlibsoftware` GitHub org this work needs. Query the org
+     with `gh` when unsure. The work may span several repositories. Repository hints:
+     - Kubernetes config is stored in the aks-gitops repo and terraform is stored in the tf-org repo.
+  2. Your branch name is `{{ cumulus.branch }}` in every repository. Before you change anything,
+     check each candidate repository for that branch (`git ls-remote --heads
+     https://github.com/Adlibsoftware/<repo> {{ cumulus.branch }}`). If it exists, clone it and
+     continue from it, and reuse its open pull request.
+  3. Clone repositories into the current directory. Follow each repository's AGENTS.md or
+     CLAUDE.md, keep changes minimal, and run its tests, linters and validation before you push.
+  4. Commit with Conventional Commit messages and push to `{{ cumulus.branch }}`. Never push to
+     the default branch and never commit secrets.
+  5. Open one pull request per repository you changed, or update the existing one. Put
+     `{{ issue.identifier }}` in the description so Azure DevOps links it. Do not merge: a human
+     reviews and merges.
+  6. When every pull request is open, post their links with `azure_devops_add_comment`, then call
+     `azure_devops_move_card` with column `Review`. That hands the work item to a human.
+
+  If you are blocked or need a human decision, explain what you need with
+  `azure_devops_add_comment` and move the card to `Review`.

@@ -1,0 +1,24 @@
+# Copy to aks-gitops: argocd/cloudops-prod/cumulus.yaml (docs/deploy.md).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cumulus
+  labels:
+    app: cumulus
+spec:
+  project: apps
+  source:
+    repoURL: git@github.com:Adlibsoftware/cumulus.git
+    path: chart
+    targetRevision: main
+    helm:
+      releaseName: cumulus
+  destination:
+    namespace: agents
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

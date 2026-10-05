@@ -1,0 +1,180 @@
+suite: WORKFLOW.md, secrets, networking
+templates:
+  - configmap.yaml
+  - externalsecrets.yaml
+  - service.yaml
+  - ingress.yaml
+  - networkpolicy.yaml
+release:
+  name: cumulus
+  namespace: agents
+values:
+  - ./values/ids.yaml
+tests:
+  - it: ships the default WORKFLOW.md with Liquid left intact for the orchestrator
+    template: configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: '(?s)^---\ntracker:\n  kind: azure_devops\n.*\n---\n'
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: '\{\{ cumulus\.branch \}\}'
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: 'Kubernetes config is stored in the aks-gitops repo and terraform is stored in the tf-org repo\.'
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: 'azure_devops_move_card'
+
+  - it: C-1 default workflow targets the DevOps backlog, opt-in tag and columns
+    template: configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: "area_path: 'AdlibCTP\\\\DevOps'"
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: 'required_labels: \[cumulus\]'
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: 'active_states: \[Backlog, Dev, Test\]'
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: 'max_concurrent_agents: 5'
+
+  - it: maps the orchestrator secrets from Key Vault
+    template: externalsecrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: cumulus
+    asserts:
+      - equal:
+          path: spec.secretStoreRef
+          value:
+            kind: ClusterSecretStore
+            name: adlib-aks-kv
+      - equal:
+          path: spec.target.name
+          value: cumulus
+      - contains:
+          path: spec.data
+          content:
+            secretKey: CUMULUS_OIDC_CLIENT_SECRET
+            remoteRef:
+              {
+                key: CumulusOidcClientSecret,
+                conversionStrategy: Default,
+                decodingStrategy: None,
+                metadataPolicy: None,
+              }
+      - contains:
+          path: spec.data
+          content:
+            secretKey: CUMULUS_SESSION_SECRET
+            remoteRef:
+              {
+                key: CumulusSessionKey,
+                conversionStrategy: Default,
+                decodingStrategy: None,
+                metadataPolicy: None,
+              }
+      - contains:
+          path: spec.data
+          content:
+            secretKey: CUMULUS_GITHUB_APP_ID
+            remoteRef:
+              {
+                key: CumulusGithubAppId,
+                conversionStrategy: Default,
+                decodingStrategy: None,
+                metadataPolicy: None,
+              }
+      - contains:
+          path: spec.data
+          content:
+            secretKey: CUMULUS_GITHUB_APP_PRIVATE_KEY
+            remoteRef:
+              {
+                key: CumulusGithubAppKey,
+                conversionStrategy: Default,
+                decodingStrategy: None,
+                metadataPolicy: None,
+              }
+
+  - it: C-3 builds the agent env secret from values
+    template: externalsecrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: cumulus-agent-env
+    asserts:
+      - equal:
+          path: spec.target.name
+          value: cumulus-agent-env
+      - equal:
+          path: spec.data
+          value:
+            - secretKey: LITELLM_API_KEY
+              remoteRef:
+                {
+                  key: CumulusLitellmKey,
+                  conversionStrategy: Default,
+                  decodingStrategy: None,
+                  metadataPolicy: None,
+                }
+            - secretKey: ANTHROPIC_API_KEY
+              remoteRef:
+                {
+                  key: CumulusAnthropicKey,
+                  conversionStrategy: Default,
+                  decodingStrategy: None,
+                  metadataPolicy: None,
+                }
+
+  - it: exposes a ClusterIP service on 8080 named cumulus
+    template: service.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cumulus
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].port
+          value: 8080
+
+  - it: routes cumulus.adlibsys.com through traefik
+    template: ingress.yaml
+    asserts:
+      - equal:
+          path: spec.ingressClassName
+          value: traefik
+      - equal:
+          path: spec.rules[0].host
+          value: cumulus.adlibsys.com
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service
+          value:
+            name: cumulus
+            port: { number: 8080 }
+
+  - it: admits only worker pods and traefik on 8080
+    template: networkpolicy.yaml
+    asserts:
+      - equal:
+          path: spec.policyTypes
+          value: [Ingress]
+      - equal:
+          path: spec.ingress
+          value:
+            - from:
+                - podSelector:
+                    matchLabels:
+                      app.kubernetes.io/managed-by: cumulus
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: traefik
+              ports:
+                - protocol: TCP
+                  port: 8080

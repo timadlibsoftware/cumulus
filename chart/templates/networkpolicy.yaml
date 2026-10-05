@@ -1,0 +1,25 @@
+# Only worker pods (internal git-token and MCP endpoints) and Traefik (UI/API) may reach the
+# orchestrator. Kubelet probes come from the node and are allowed by Calico regardless.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cumulus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cumulus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "cumulus.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: cumulus
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports:
+        - protocol: TCP
+          port: 8080

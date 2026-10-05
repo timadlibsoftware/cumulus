@@ -1,0 +1,6 @@
+apiVersion: v2
+name: cumulus
+description: Cumulus orchestrator (Symphony implementation) for the agents namespace on cloudops-prod
+type: application
+version: 0.1.0
+appVersion: '0.1.0'

@@ -1,0 +1,41 @@
+# C-3/C-4: the orchestrator runs worker Jobs, attaches to their pods and cleans up orphans,
+# in its own namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cumulus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cumulus.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get, list, watch, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, delete]
+  - apiGroups: [""]
+    resources: [pods/attach]
+    verbs: [create, get]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cumulus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cumulus.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: cumulus
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cumulus
