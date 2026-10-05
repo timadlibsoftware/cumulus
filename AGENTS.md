@@ -56,7 +56,12 @@ packages/orchestrator/   Fastify service (Node 24 LTS)
   src/executor/          WorkerExecutor interface: local process (dev/test) and Kubernetes Job + attach
   src/orchestrator/      State machine, tick, reconcile, retry, drain, startup cleanup
   src/db/                Drizzle schema + fail-open audit store (Postgres)
-  src/http/              /api/v1/*, SSE, Entra OIDC, static UI
+  src/http/              public.ts (/api/v1/*, SSE, Entra OIDC, static UI), internal.ts (MCP + git tokens, port 8081)
+  src/github/            GitHub App: installation tokens, branch listing/deletion
+  src/janitor.ts         C-9 branch cleanup + sweeper (and local workspace removal)
+  src/registry.ts        Live runs and their per-run bearer tokens (C-11)
+  src/main.ts, cli.ts    Wiring from env + CLI args; SIGTERM/SIGQUIT drain (C-4)
+  drizzle/               Generated SQL migrations (`npx drizzle-kit generate` after schema changes)
   test/                  Vitest tests; test/contracts/ holds shared contract suites
 packages/ui/             Vue 3 + Vite + PrimeVue (Sakai) SPA, built into the orchestrator's public/
 packages/orchestrator/Dockerfile  Orchestrator image (context: repo root, see .dockerignore)
@@ -75,7 +80,6 @@ deploy/argocd/           ArgoCD Application to copy into aks-gitops
 docs/spec/               Upstream spec copy + CUMULUS-SPEC.md
 docs/adapters/           Tracker adapter profiles (required by upstream §11.2)
 docs/deploy.md           One-time infrastructure prerequisites and first deploy
-WORKFLOW.md              Default workflow: DevOps backlog, OpenCode runner
 ```
 
 The deployed default workflow lives in `chart/values.yaml` (`workflow:`) and is mounted at
@@ -105,8 +109,27 @@ docker buildx build --load --build-context cloudops-skills=<checkout> -t cumulus
 worker/test/smoke.sh cumulus-worker:local
 ```
 
-Postgres tests use Testcontainers and need Docker. They skip, and report themselves as skipped, when
-Docker is unavailable.
+Postgres tests use Testcontainers (Postgres 14, the production version) and need Docker. They skip,
+and report themselves as skipped, when `docker info` fails. On WSL with Docker Desktop's credential
+helper, pulls fail with `docker-credential-desktop.exe ENOENT`; run tests with an empty config:
+`DOCKER_CONFIG=$(mktemp -d) TESTCONTAINERS_RYUK_DISABLED=true pnpm test`.
+
+Live checks (§17.8, read-only, skipped unless enabled): `CUMULUS_LIVE_ADO=1` (az login),
+`CUMULUS_LIVE_AGENTS=1` (local `opencode`), `CUMULUS_LIVE_K8S_CONTEXT=<context>`.
+
+## Running locally
+
+```bash
+pnpm --filter @cumulus/ui build
+CUMULUS_AUTH_DISABLED=1 pnpm --filter @cumulus/orchestrator dev -- /path/to/WORKFLOW.md --port 8080
+```
+
+Use `worker.executor: local` and `tracker.kind: memory` (or `azure_devops` with `az login`) in that
+workflow. Postgres is optional (`CUMULUS_DATABASE_URL`); without it there is no run history and
+settings cannot be changed. The orchestrator reads its configuration from these environment
+variables (the chart sets them): `CUMULUS_PUBLIC_URL`, `CUMULUS_INTERNAL_URL`, `CUMULUS_OIDC_*`,
+`CUMULUS_SESSION_SECRET`, `CUMULUS_DB_HOST`/`_NAME`/`_USER` (Entra auth), `CUMULUS_GITHUB_APP_ID`,
+`CUMULUS_GITHUB_APP_PRIVATE_KEY`, `CUMULUS_GITHUB_ORG`, `CUMULUS_WORKER_IMAGE` and `POD_NAMESPACE`.
 
 ## UI (`packages/ui`)
 
@@ -153,8 +176,11 @@ test/                    *.test.ts; helpers.ts mounts with PrimeVue (theme 'none
 ## Conventions
 
 - TypeScript, ESM, `strict`. Import type-only symbols with `import type`.
-- Inject time (`Clock`), I/O and randomness so orchestrator tests are deterministic. No real timers
-  or network in unit tests.
+- Keep orchestrator tests deterministic. Use vitest fake timers for time, and inject I/O and IDs
+  (see `test/orchestrator/harness.ts`). No real network in unit tests; `test/e2e/` uses real local
+  processes and loopback HTTP only.
+- Check tests can fail. When a suite passes on its first run, mutate the code briefly and confirm a
+  test goes red.
 - Logs: pino JSON to stdout. Every log line in a run context carries `run_id`, `issue_id` and
   `issue_identifier`; session logs also carry `session_id`.
 - Secrets: never logged, never passed to agent processes unless explicitly intended for them.

@@ -65,6 +65,14 @@ Rules (also in `AGENTS.md`):
     The `codex` key is ignored. Dispatch preflight (§6.3) checks for a supported `runner.kind` and a
     non-empty `runner.command` instead of `codex.command`.
 
+  - OpenCode: the model is set with `session/set_model` when `runner.model` is set. A failure there is
+    reported as `other_message` and the session continues on the agent's default model. ACP has no
+    user-input request, so `turn_input_required` never occurs. Stop reasons `end_turn`, `max_tokens`
+    and `max_turn_requests` complete the turn; `cancelled` → `turn_cancelled`; anything else →
+    `turn_failed`.
+  - Claude Code: `--permission-mode bypassPermissions`, `--mcp-config` and `--model` are appended to
+    `runner.command` at launch. `runner.read_timeout_ms` does not apply, because the process sends
+    nothing before the first prompt.
   - Runtime events keep the §10.4 names. Token usage is reported as absolute session totals.
   - **Approval and user-input policy (§10.5):** high-trust inside the sandboxed worker pod.
     - Permission requests are auto-approved and emitted as `approval_auto_approved`.
@@ -102,6 +110,17 @@ Rules (also in `AGENTS.md`):
 
     `local` runs the agent as a child process on the orchestrator host, for development and tests.
     Changes apply to future runs.
+
+  - Worker contract (orchestrator → `worker/entrypoint.sh`):
+    - Environment: `CUMULUS_WORKSPACE`, `CUMULUS_WORKSPACE_ROOT`, `CUMULUS_HOOK_AFTER_CREATE`,
+      `CUMULUS_HOOK_BEFORE_RUN`, `CUMULUS_HOOK_AFTER_RUN`, `CUMULUS_HOOK_TIMEOUT_MS`,
+      `CUMULUS_RUN_ID`, `CUMULUS_RUN_TOKEN`, `CUMULUS_INTERNAL_URL`, `CUMULUS_BRANCH`,
+      `CUMULUS_ISSUE_IDENTIFIER`.
+    - argv: `bash -lc <runner.command>`.
+    - Only the agent writes to stdout. A setup or hook failure exits with code 70, and the
+      orchestrator reports it with the pod's log tail.
+  - A pod that terminates before attach, or reports `ImagePullBackOff`/`ErrImagePull`, fails the
+    attempt. So does a pod not running within 10 minutes. In each case the Job is deleted.
 - **Reason:** Agents need an isolated, disposable environment with their own identity. A long-lived
   in-pod worker that dials back is deferred (follow-up issue).
 - **Decided:** 2026-10-04, Tim
@@ -188,6 +207,9 @@ Rules (also in `AGENTS.md`):
     Access is limited to one group, enforced by "assignment required" on the enterprise app.
   - `/` serves the Vue SPA. `/api/v1/<issue_identifier>` is resolved after the fixed routes.
   - `server.host` defaults to `127.0.0.1`. The chart sets `0.0.0.0`.
+  - Agent-facing endpoints are served on a separate internal listener: `--internal-port`, default
+    `8081`. That port is never routed by the ingress, and the NetworkPolicy admits only worker pods.
+    It serves `POST /mcp/runs/<run_id>` (C-11) and `GET /internal/runs/<run_id>/git-token` (C-10).
 - **Reason:** Live UI, authenticated operator access, run history.
 - **Decided:** 2026-10-04, Tim (SSE chosen over WebSocket because traffic is one-way)
 - **Conformance impact:** §17.6 plus route tests with auth on and off.
@@ -216,6 +238,12 @@ Rules (also in `AGENTS.md`):
   - Git and `gh` auth comes from the `cumulus` GitHub App.
   - `WORKFLOW.md` gives hints, e.g. "Kubernetes config is stored in the aks-gitops repo and
     terraform is stored in the tf-org repo."
+  - Prompt templates get one extra variable, `cumulus`, which extends §5.4. It holds `branch`
+    (`cumulus/<workspace_key>`), `workspace_key` and `run_id`. Strict rendering still rejects
+    unknown variables and filters.
+  - Agents fetch GitHub credentials per use. The worker's git credential helper and `gh` wrapper call
+    `GET /internal/runs/<run_id>/git-token` with the run token. The orchestrator returns the App
+    installation token, cached until 5 minutes before expiry.
 - **Reason:** Work items do not name a repository. Some work spans repositories.
 - **Decided:** 2026-10-04, Tim
 - **Conformance impact:** None on core rows.
@@ -231,6 +259,8 @@ Rules (also in `AGENTS.md`):
     - `azure_devops_move_card(column)`: allowed columns come from `tracker.provider.agent_columns`,
       default `[Dev, Test, Review]`.
     - `azure_devops_add_comment(markdown)`
+  - The endpoint is a minimal MCP Streamable HTTP server: JSON responses only, with
+    `initialize`, `ping`, `tools/list` and `tools/call`. `GET` returns 405.
   - The tools execute host-side with the orchestrator's credential. The agent never sees ADO
     credentials.
   - Moving the card to Review is the agent's hand-off. Review is not an active state, so dispatch
