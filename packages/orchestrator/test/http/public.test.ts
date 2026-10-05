@@ -272,6 +272,41 @@ describe('public HTTP server (§13.7, C-8)', () => {
       expect(callback.headers.location).toBe('/');
     });
 
+    it('rejects returnTo values that browsers normalize to another origin', async () => {
+      const { app } = await build(oidc);
+      for (const evil of [
+        '%2F%09%2Fevil.com',
+        '%2F%0A%2Fevil.com',
+        '%2F%5Cevil.com',
+        'https%3A%2F%2Fevil.com',
+      ]) {
+        const login = await app.inject(`/auth/login?returnTo=${evil}`);
+        const location = new URL(login.headers.location as string);
+        const flowCookie = login.cookies.find((c) => c.name === 'cumulus_oidc')!;
+        const cb = await app.inject({
+          url: `/auth/callback?code=a&state=${location.searchParams.get('state')}`,
+          cookies: { cumulus_oidc: flowCookie.value },
+        });
+        expect(cb.statusCode).toBe(302);
+        expect(cb.headers.location).toBe('/');
+      }
+    });
+
+    it('enforces auth on percent-encoded API paths', async () => {
+      const { app } = await build(oidc);
+      expect((await app.inject('/%61pi/v1/state')).statusCode).toBe(401);
+      expect((await app.inject({ method: 'POST', url: '/%61pi/v1/refresh' })).statusCode).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: 'PUT',
+            url: '/%61pi/v1/settings/agent.max_concurrent_agents',
+            payload: { value: 1 },
+          })
+        ).statusCode,
+      ).toBe(401);
+    });
+
     it('logout clears the session', async () => {
       const { app } = await build(oidc);
       const res = await app.inject('/auth/logout');
@@ -304,6 +339,19 @@ describe('public HTTP server (§13.7, C-8)', () => {
     controller.abort();
     await new Promise((r) => setTimeout(r, 20));
     expect(orchestrator.listenerCount('agent_event')).toBe(0);
+  });
+
+  it('C-4 closing the server does not wait for open SSE streams', async () => {
+    const { app } = await build();
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    const res = await fetch(`${address}/api/v1/events`);
+    await res.body!.getReader().read();
+    const closed = await Promise.race([
+      app.close().then(() => 'closed'),
+      new Promise((r) => setTimeout(() => r('timeout'), 2000)),
+    ]);
+    expect(closed).toBe('closed');
+    apps = apps.filter((a) => a !== app);
   });
 
   it('§13.7.1 serves the UI at / with SPA fallback but not for unknown API paths', async () => {

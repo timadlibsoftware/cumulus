@@ -325,6 +325,68 @@ describe('worker attempts (§16.5)', () => {
   });
 });
 
+describe('worker robustness', () => {
+  it('a worker that cannot be stopped is abandoned after a bounded wait and frees its slot', async () => {
+    const h = harness({ issues: [makeIssue({ id: '1' })] });
+    h.executor.configure = (handle) => (handle.stuck = true);
+    await started(h);
+    h.tracker.upsert(makeIssue({ id: '1', state: 'Closed' }));
+    await h.orchestrator.tick();
+    await h.flush();
+    await h.advance(5 * 60_000);
+    expect(h.orchestrator.snapshot().running).toHaveLength(0);
+    expect(h.logs.some((l) => l.level === 'error' && /abandon/.test(l.msg))).toBe(true);
+  });
+
+  it('§16.5 waits for after_run (hook timeout) before stopping a worker that ended normally', async () => {
+    const h = harness({
+      workflow: { agent: { max_turns: 1 }, hooks: { timeout_ms: 60000 } },
+      issues: [makeIssue({ id: '1' })],
+    });
+    h.executor.configure = (handle) => (handle.lingerMs = 45_000);
+    await started(h);
+    h.runner.complete('1');
+    await h.flush();
+    await h.advance(45_000);
+    expect(h.executor.handles[0]!.killed).toBe(false);
+    expect(h.audit.ended[0]).toMatchObject({ status: 'completed' });
+  });
+
+  it('C-3 stall detection does not count pod scheduling and image pull', async () => {
+    const h = harness({
+      workflow: { runner: { stall_timeout_ms: 60000 } },
+      issues: [makeIssue({ id: '1' })],
+    });
+    let release!: () => void;
+    h.executor.startGate = new Promise<void>((r) => (release = r));
+    await started(h);
+    await h.advance(150_000);
+    release();
+    await h.flush();
+    expect(h.orchestrator.snapshot().running).toHaveLength(1);
+    expect(h.executor.handles[0]!.killed).toBe(false);
+  });
+
+  it('C-3 reports the worker exit code and message when the worker dies', async () => {
+    const h = await started(harness({ issues: [makeIssue({ id: '1' })] }));
+    h.executor.handles[0]!.exit(70, 'cumulus: before_run hook failed (exit 1)');
+    await h.flush();
+    const error = h.orchestrator.snapshot().retrying[0]!.error!;
+    expect(error).toContain('worker exit 70');
+    expect(error).toContain('before_run hook failed');
+  });
+
+  it('C-3 allows hook time in the agent startup handshake', async () => {
+    const h = await started(
+      harness({
+        workflow: { hooks: { timeout_ms: 60000 }, runner: { read_timeout_ms: 5000 } },
+        issues: [makeIssue({ id: '1' })],
+      }),
+    );
+    expect(h.runner.options[0]!.startupTimeoutMs).toBe(125_000);
+  });
+});
+
 describe('reconciliation (§8.5)', () => {
   it('§17.4 reconciliation with no running issues makes no tracker refresh call', async () => {
     const h = await started(harness());
@@ -581,6 +643,43 @@ describe('Cumulus lifecycle (C-4, C-5)', () => {
     await drained;
     expect(h.executor.handles[0]!.killed).toBe(false);
     expect(h.orchestrator.snapshot().draining).toBe(true);
+  });
+
+  it('C-4 no dispatch when drain starts during the candidate fetch', async () => {
+    const h = harness({ issues: [makeIssue({ id: '1' })] });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = h.tracker.fetchIssuesByStates.bind(h.tracker);
+    h.tracker.fetchIssuesByStates = async (states) => {
+      await gate;
+      return original(states);
+    };
+    await h.orchestrator.start();
+    await h.flush();
+    const drained = h.orchestrator.drain(1000);
+    release();
+    await h.flush();
+    await drained;
+    expect(h.executor.specs).toHaveLength(0);
+  });
+
+  it('C-4 no dispatch when drain starts during a retry refresh', async () => {
+    const h = await started(harness({ issues: [makeIssue({ id: '1' })] }));
+    h.runner.fail('1');
+    await h.flush();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = h.tracker.fetchIssuesByIds.bind(h.tracker);
+    h.tracker.fetchIssuesByIds = async (ids) => {
+      await gate;
+      return original(ids);
+    };
+    await h.advance(10000);
+    const drained = h.orchestrator.drain(1000);
+    release();
+    await h.flush();
+    await drained;
+    expect(h.executor.specs).toHaveLength(1);
   });
 
   it('C-4 drain timeout stops remaining workers and marks them interrupted', async () => {

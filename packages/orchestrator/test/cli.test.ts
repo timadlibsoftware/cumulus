@@ -82,6 +82,20 @@ describe('CLI (§17.7)', () => {
     expect(r.stderr).toMatch(/unsupported_tracker_kind/);
   }, 30_000);
 
+  it('C-11 starts the internal server for agents even without a public port', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'cumulus-cli-'));
+    await writeFile(join(cwd, 'WORKFLOW.md'), workflow().replace('server:\n  port: 0\n', ''));
+    const r = await run(['--internal-port', '0'], {
+      cwd,
+      env: { CUMULUS_INTERNAL_URL: 'http://cumulus.agents.svc:8081' },
+      onStdout: (out, kill) => {
+        if (out.includes('"msg":"internal http listening"')) kill();
+      },
+    });
+    expect(r.stdout).toContain('internal http listening');
+    expect(r.code).toBe(0);
+  }, 30_000);
+
   it('§17.7 starts, serves HTTP and exits 0 on SIGTERM after draining', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'cumulus-cli-'));
     await writeFile(join(cwd, 'WORKFLOW.md'), workflow());

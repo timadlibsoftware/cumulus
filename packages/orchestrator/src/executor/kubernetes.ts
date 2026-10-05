@@ -98,6 +98,8 @@ export function buildJob(spec: WorkerSpec, worker: WorkerConfig, instance: strin
         metadata: { labels: { ...labels, 'azure.workload.identity/use': 'true' } },
         spec: {
           restartPolicy: 'Never',
+          // Room for after_run when the Job is deleted (§16.5).
+          terminationGracePeriodSeconds: Math.ceil(spec.hooks.timeoutMs / 1000) + 30,
           serviceAccountName: worker.serviceAccount,
           automountServiceAccountToken: false,
           securityContext: { runAsNonRoot: true, seccompProfile: { type: 'RuntimeDefault' } },
@@ -187,7 +189,14 @@ export class KubernetesExecutor implements WorkerExecutor {
       for (let i = 0; i < 20; i++) {
         const current = await this.findPod(spec.runId).catch(() => null);
         if (!current || current.containerState === 'terminated') {
-          return { code: current?.exitCode ?? null, reason: killed ? 'killed' : 'exited' } as WorkerExit;
+          const code = current?.exitCode ?? null;
+          const exit: WorkerExit = { code, reason: killed ? 'killed' : 'exited' };
+          if (!killed && code !== 0 && code !== null && current) {
+            // C-3: setup/hook failures (exit 70) explain themselves on stderr; keep the tail.
+            const logs = await this.api.podLogTail(ns, current.name, CONTAINER).catch(() => '');
+            if (logs.trim()) exit.message = logs.trim().slice(-1000);
+          }
+          return exit;
         }
         await sleep(this.pollMs);
       }
@@ -207,8 +216,11 @@ export class KubernetesExecutor implements WorkerExecutor {
       imageDigest: async () => pod!.imageId,
       kill: async () => {
         killed = true;
-        await this.api.deleteJob(ns, jobName);
-        attachment.close();
+        try {
+          await this.api.deleteJob(ns, jobName);
+        } finally {
+          attachment.close();
+        }
       },
     };
   }

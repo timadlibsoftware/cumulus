@@ -71,8 +71,9 @@ class FakeK8s implements K8sApi {
   async attach(_ns: string, pod: string, _c: string, stdin: Readable, stdout: Writable, stderr: Writable) {
     let close!: () => void;
     const closed = new Promise<void>((r) => (close = r));
-    this.attached.push({ pod, stdin, stdout, stderr, close });
-    return { closed, close };
+    const entry = { pod, stdin, stdout, stderr, close };
+    this.attached.push(entry);
+    return { closed, close: () => entry.close() };
   }
 }
 
@@ -215,6 +216,46 @@ describe('KubernetesExecutor (C-3)', () => {
     k8s.attached[0]!.close();
     expect(await h.exited).toMatchObject({ reason: 'killed' });
     expect(k8s.deleted).toEqual(['cumulus-0192f3a4-aaaa-bbbb-cccc-1234567890ab']);
+  });
+
+  it('kill closes the attach stream even when deleting the Job fails', async () => {
+    const k8s = new FakeK8s();
+    const ex = new KubernetesExecutor(k8s, worker, opts);
+    const h = await ex.start(spec());
+    let closed = false;
+    const a = k8s.attached[0]!;
+    const original = a.close;
+    a.close = () => {
+      closed = true;
+      original();
+    };
+    k8s.deleteJob = async () => {
+      throw new Error('apiserver 503');
+    };
+    await expect(h.kill()).rejects.toThrow('apiserver 503');
+    expect(closed).toBe(true);
+  });
+
+  it('C-3 reports a failing container exit with its log tail', async () => {
+    const k8s = new FakeK8s();
+    const ex = new KubernetesExecutor(k8s, worker, opts);
+    const h = await ex.start(spec());
+    const pod = [...k8s.pods.values()][0]!;
+    k8s.pods.set(pod.name, { ...pod, phase: 'Failed', containerState: 'terminated', exitCode: 70 });
+    k8s.logs = 'cumulus: before_run hook failed (exit 1)';
+    k8s.attached[0]!.close();
+    expect(await h.exited).toEqual({
+      code: 70,
+      reason: 'exited',
+      message: 'cumulus: before_run hook failed (exit 1)',
+    });
+  });
+
+  it('§16.5 gives the pod enough termination grace for after_run', () => {
+    const job = buildJob(spec(), worker, 'i') as {
+      spec: { template: { spec: { terminationGracePeriodSeconds: number } } };
+    };
+    expect(job.spec.template.spec.terminationGracePeriodSeconds).toBe(90);
   });
 
   it('C-4 deletes every Job managed by cumulus as an orphan at startup', async () => {

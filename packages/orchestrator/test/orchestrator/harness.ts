@@ -37,6 +37,10 @@ export class FakeHandle implements WorkerHandle {
   private readonly done = deferred<WorkerExit>();
   readonly exited = this.done.promise;
   killed = false;
+  /** Simulates a worker that cannot be stopped: kill throws and the process never exits. */
+  stuck = false;
+  /** Delay between stdin close and process exit (e.g. a slow after_run hook). */
+  lingerMs = 0;
   constructor(
     readonly name: string,
     readonly spec: WorkerSpec,
@@ -45,11 +49,12 @@ export class FakeHandle implements WorkerHandle {
     return 'img@sha256:1';
   }
   async kill() {
+    if (this.stuck) throw new Error('kubernetes API unavailable');
     this.killed = true;
     this.done.resolve({ code: 143, reason: 'killed' });
   }
-  exit(code = 0) {
-    this.done.resolve({ code, reason: 'exited' });
+  exit(code = 0, message?: string) {
+    this.done.resolve({ code, reason: 'exited', ...(message ? { message } : {}) });
   }
 }
 
@@ -58,13 +63,18 @@ export class FakeExecutor implements WorkerExecutor {
   specs: WorkerSpec[] = [];
   handles: FakeHandle[] = [];
   failStart: Error | null = null;
+  /** When set, start() waits for this promise (pod pending / image pull). */
+  startGate: Promise<void> | null = null;
+  configure: (h: FakeHandle) => void = () => {};
   orphansDeleted = 0;
   calls: string[] = [];
   async start(spec: WorkerSpec): Promise<WorkerHandle> {
     this.calls.push('start');
     this.specs.push(spec);
+    if (this.startGate) await this.startGate;
     if (this.failStart) throw this.failStart;
     const h = new FakeHandle(`pod-${spec.runId}`, spec);
+    this.configure(h);
     this.handles.push(h);
     return h;
   }
@@ -132,7 +142,11 @@ export class FakeRunner implements AgentRunner {
         return { ...result, turnId: `${threadId}-${turn}` };
       },
       // Like real agents: closing stdin ends the process.
-      close: async () => handle.exit(0),
+      close: async () => {
+        if (handle.stuck) return;
+        if (handle.lingerMs > 0) setTimeout(() => handle.exit(0), handle.lingerMs);
+        else handle.exit(0);
+      },
     };
   }
 

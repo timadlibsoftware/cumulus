@@ -100,13 +100,18 @@ function unsign<T extends { exp: number }>(secret: string, raw: string | undefin
   }
 }
 
+/** Same-origin relative path only; rejects anything a browser could normalize to another origin. */
 function safeReturnTo(value: unknown): string {
-  return typeof value === 'string' &&
-    value.startsWith('/') &&
-    !value.startsWith('//') &&
-    !value.includes('\\')
-    ? value
-    : '/';
+  // eslint-disable-next-line no-control-regex -- rejecting control characters is the point (open redirect)
+  if (typeof value !== 'string' || !value.startsWith('/') || /[\u0000-\u001f\u007f\\]/.test(value))
+    return '/';
+  try {
+    const base = new URL('https://cumulus.invalid');
+    const url = new URL(value, base);
+    return url.origin === base.origin ? `${url.pathname}${url.search}` : '/';
+  } catch {
+    return '/';
+  }
 }
 
 const cookieOptions = (maxAgeMs: number) => ({
@@ -119,7 +124,8 @@ const cookieOptions = (maxAgeMs: number) => ({
 
 /** §13.7 + C-8: dashboard, REST API, SSE and Entra sign-in. */
 export async function buildPublicServer(deps: PublicServerDeps): Promise<FastifyInstance> {
-  const app = Fastify({ logger: deps.logger ?? false, trustProxy: true });
+  // forceCloseConnections: open SSE streams must not block shutdown (C-4).
+  const app = Fastify({ logger: deps.logger ?? false, trustProxy: true, forceCloseConnections: true });
   await app.register(fastifyCookie);
   app.decorateRequest('user', null);
 
@@ -152,8 +158,17 @@ export async function buildPublicServer(deps: PublicServerDeps): Promise<Fastify
     }
     const session = unsign<{ u: User; exp: number }>(deps.sessionSecret, req.cookies[SESSION_COOKIE]);
     req.user = session?.u ?? null;
-    if (!req.user && req.url.startsWith('/api/'))
+    // Decide on the routed (decoded) path, not the raw URL, so encodings like /%61pi cannot bypass auth.
+    let decoded = req.url;
+    try {
+      decoded = decodeURIComponent(req.url.split('?')[0] ?? '');
+    } catch {
+      /* keep raw */
+    }
+    const routed = req.routeOptions.url ?? '';
+    if (!req.user && (routed.startsWith('/api/') || decoded.startsWith('/api/'))) {
       return sendError(reply, 401, 'unauthenticated', 'sign in required');
+    }
   });
 
   app.get('/auth/me', async (req, reply) =>

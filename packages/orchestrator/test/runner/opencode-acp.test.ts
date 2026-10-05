@@ -222,6 +222,20 @@ describe('OpenCode ACP runner (C-2)', () => {
     await expect(session.runTurn('x', 't')).resolves.toMatchObject({ turnId: 'ses_1-1' });
   });
 
+  it('C-3 the initialize handshake waits for the startup timeout (in-pod hooks run first)', async () => {
+    const agent = new FakeAgent((raw, a) => {
+      const msg = raw as Msg;
+      if (msg.method === 'initialize')
+        setTimeout(() => a.send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1 } }), 80);
+      if (msg.method === 'session/new') a.send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 's' } });
+    });
+    const session = await runner.startSession(
+      agent.io,
+      options([], { readTimeoutMs: 30, startupTimeoutMs: 500 }),
+    );
+    expect(session.threadId).toBe('s');
+  });
+
   it('§17.5 enforces the read timeout during startup and emits startup_failed', async () => {
     const agent = new FakeAgent(() => {});
     const events: AgentEvent[] = [];

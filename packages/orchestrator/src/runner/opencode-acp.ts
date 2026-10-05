@@ -76,7 +76,7 @@ class AcpSession implements AgentSession {
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
         clientInfo: { name: 'cumulus', version: '0.1.0' },
       },
-      timeout,
+      this.options.startupTimeoutMs ?? timeout,
     );
     const created = (await this.peer.request(
       'session/new',

@@ -41,6 +41,8 @@ export interface SessionOptions {
   model: string | null;
   mcpServers: McpServerSpec[];
   readTimeoutMs: number;
+  /** Timeout for the first handshake request; covers in-pod hooks that run before the agent starts. */
+  startupTimeoutMs?: number;
   turnTimeoutMs: number;
   onEvent(event: AgentEvent): void;
 }

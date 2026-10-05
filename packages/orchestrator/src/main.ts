@@ -207,7 +207,11 @@ export async function main(
     const url = await publicServer.listen({ port: serverPort, host });
     logger.info({ url }, 'http listening');
     servers.push(publicServer);
+  }
 
+  // C-11: agents reach MCP tools and git tokens here; run it whenever agents are given its URL.
+  if (servers.length > 0 || env['CUMULUS_INTERNAL_URL']) {
+    const host = args.host ?? workflow.current().config.server.host;
     const internal = await buildInternalServer({
       registry,
       gitTokens: github ? { token: () => github.installationToken() } : null,

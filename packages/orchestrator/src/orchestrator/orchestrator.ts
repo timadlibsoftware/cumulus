@@ -9,7 +9,7 @@ import type {
 } from '@cumulus/shared';
 import { EventEmitter } from 'node:events';
 import type { ServiceConfig } from '../config/config.js';
-import type { WorkerHandle } from '../executor/types.js';
+import type { WorkerExit, WorkerHandle } from '../executor/types.js';
 import { continuationPrompt, renderPrompt } from '../prompt.js';
 import { readLines } from '../runner/ndjson.js';
 import type { AgentSession, McpServerSpec } from '../runner/types.js';
@@ -45,6 +45,9 @@ interface RunningEntry {
   lastReported: TokenUsage;
   handle: WorkerHandle | null;
   stopReason: StopReason | null;
+  /** Rejects when the run is stopped, so awaits on a wedged agent cannot hang the worker. */
+  stopped: Promise<never>;
+  abort: AbortController;
 }
 
 interface RetryEntry {
@@ -72,7 +75,10 @@ const ORCHESTRATOR_SECRETS = [
   'CUMULUS_GITHUB_APP_PRIVATE_KEY',
   'CUMULUS_GITHUB_APP_ID',
 ];
-const EXIT_GRACE_MS = 30_000;
+/** Extra time beyond hooks.timeout_ms for a worker to exit after its session ends (after_run). */
+const EXIT_MARGIN_MS = 30_000;
+/** How long to wait for a killed worker before abandoning it. */
+const KILL_WAIT_MS = 60_000;
 const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const zero = (): TokenUsage => ({ input_tokens: 0, output_tokens: 0, total_tokens: 0 });
 
@@ -324,6 +330,8 @@ export class Orchestrator extends EventEmitter {
     if (stallMs > 0) {
       const now = Date.now();
       for (const entry of this.running.values()) {
+        // C-3: pod scheduling and image pull are bounded by the executor's start timeout, not stall.
+        if (!entry.handle) continue;
         const last = entry.lastEventAtMs ?? entry.startedAtMs;
         if (now - last > stallMs) this.stopRun(entry, 'stalled');
       }
@@ -362,6 +370,7 @@ export class Orchestrator extends EventEmitter {
   private stopRun(entry: RunningEntry, reason: StopReason): void {
     if (entry.stopReason) return;
     entry.stopReason = reason;
+    entry.abort.abort();
     this.deps.logger.info(this.ctx(entry, { reason }), `stopping worker reason=${reason}`);
     entry.handle
       ?.kill()
@@ -385,7 +394,13 @@ export class Orchestrator extends EventEmitter {
 
   /** §16.4. Synchronously claims the issue before any await. */
   private dispatch(issue: Issue, attempt: number | null, snap: WorkflowSnapshot): void {
+    if (this.draining || this.stopped) return;
     const key = workspaceKey(issue.identifier);
+    const abort = new AbortController();
+    const stopped = new Promise<never>((_, reject) =>
+      abort.signal.addEventListener('abort', () => reject(new Error(`stopped (${entry.stopReason})`))),
+    );
+    stopped.catch(() => {});
     const entry: RunningEntry = {
       runId: this.deps.newRunId(),
       issue,
@@ -401,6 +416,8 @@ export class Orchestrator extends EventEmitter {
       lastReported: zero(),
       handle: null,
       stopReason: null,
+      stopped,
+      abort,
     };
     this.running.set(issue.id, entry);
     this.claimed.add(issue.id);
@@ -480,6 +497,8 @@ export class Orchestrator extends EventEmitter {
           timeoutMs: config.hooks.timeoutMs,
         },
       });
+      // Stall detection starts once the worker is attached (C-3).
+      entry.lastEventAtMs = Date.now();
       readLines(entry.handle.stderr, {
         maxLineBytes: 64 * 1024,
         onLine: (line) => this.deps.logger.info(this.ctx(entry, { stream: 'stderr' }), line),
@@ -493,14 +512,19 @@ export class Orchestrator extends EventEmitter {
         }),
       );
 
-      session = await runner.startSession(entry.handle, {
-        cwd: path,
-        model: config.runner.model,
-        mcpServers,
-        readTimeoutMs: config.runner.readTimeoutMs,
-        turnTimeoutMs: config.runner.turnTimeoutMs,
-        onEvent: (e) => this.onAgentEvent(entry, e),
-      });
+      const guard = <T>(p: Promise<T>) => Promise.race([p, entry.stopped]);
+      session = await guard(
+        runner.startSession(entry.handle, {
+          cwd: path,
+          model: config.runner.model,
+          mcpServers,
+          readTimeoutMs: config.runner.readTimeoutMs,
+          // In-pod hooks (after_create, before_run) run before the agent can answer (C-3).
+          startupTimeoutMs: config.runner.readTimeoutMs + 2 * config.hooks.timeoutMs,
+          turnTimeoutMs: config.runner.turnTimeoutMs,
+          onEvent: (e) => this.onAgentEvent(entry, e),
+        }),
+      );
       await this.safe('running', () => this.deps.audit.runTransition(entry.runId, 'running'));
 
       const maxTurns = config.agent.maxTurns;
@@ -515,10 +539,12 @@ export class Orchestrator extends EventEmitter {
               })
             : continuationPrompt(issue, turn, maxTurns);
         entry.turnCount = turn;
-        await session.runTurn(prompt, `${issue.identifier}: ${issue.title}`);
-        const refreshed = await tracker.fetchIssuesByIds([issue.id]).catch((err: unknown) => {
-          throw new Error(`issue state refresh error: ${describeError(err)}`);
-        });
+        await guard(session.runTurn(prompt, `${issue.identifier}: ${issue.title}`));
+        const refreshed = await guard(
+          tracker.fetchIssuesByIds([issue.id]).catch((err: unknown) => {
+            throw new Error(`issue state refresh error: ${describeError(err)}`);
+          }),
+        );
         if (refreshed.length === 0) break;
         issue = refreshed[0]!;
         entry.issue = issue;
@@ -528,36 +554,62 @@ export class Orchestrator extends EventEmitter {
     } catch (err) {
       outcome = { kind: 'abnormal', error: describeError(err) };
     } finally {
-      await this.finishWorker(entry, session, outcome);
+      const exit = await this.finishWorker(entry, session, outcome, config.hooks.timeoutMs);
       this.deps.registry.unregister(entry.runId);
+      // C-3: a dying worker explains itself (exit 70 + log tail for setup and hook failures).
+      if (
+        outcome.kind === 'abnormal' &&
+        exit &&
+        exit.reason !== 'killed' &&
+        exit.code !== null &&
+        exit.code !== 0
+      ) {
+        outcome = {
+          kind: 'abnormal',
+          error: `${outcome.error}; worker exit ${exit.code}${exit.message ? `: ${exit.message}` : ''}`,
+        };
+      }
     }
     return outcome;
   }
 
-  /** Ends the session, waits for the worker to exit (so after_run can run), then kills stragglers. */
+  /**
+   * Ends the session and waits for the worker to exit (so after_run can run). Stragglers are killed;
+   * a worker that still does not exit is abandoned so its slot and claim are released.
+   */
   private async finishWorker(
     entry: RunningEntry,
     session: AgentSession | null,
     outcome: Outcome,
-  ): Promise<void> {
+    hookTimeoutMs: number,
+  ): Promise<WorkerExit | null> {
     const handle = entry.handle;
-    if (outcome.kind === 'normal' && session) {
-      await session.close().catch(() => {});
-    } else {
-      await session?.close().catch(() => {});
-      await handle?.kill().catch(() => {});
-    }
-    if (!handle) return;
-    let timer: NodeJS.Timeout | undefined;
-    const exited = await Promise.race([
-      handle.exited.then(() => true),
-      new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), EXIT_GRACE_MS))),
-    ]);
-    clearTimeout(timer);
-    if (!exited) {
-      await handle.kill().catch(() => {});
-      await handle.exited;
-    }
+    const kill = async () => {
+      try {
+        await handle?.kill();
+      } catch (err) {
+        this.deps.logger.warn(this.ctx(entry, { error: describeError(err) }), 'worker kill failed');
+      }
+    };
+    const waitExit = async (ms: number): Promise<WorkerExit | null> => {
+      let timer: NodeJS.Timeout | undefined;
+      const result = await Promise.race([
+        handle!.exited,
+        new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), ms))),
+      ]);
+      clearTimeout(timer);
+      return result;
+    };
+    await session?.close().catch(() => {});
+    if (!handle) return null;
+    if (outcome.kind !== 'normal' || entry.stopReason) await kill();
+    let exit = await waitExit(outcome.kind === 'normal' ? hookTimeoutMs + EXIT_MARGIN_MS : KILL_WAIT_MS);
+    if (exit) return exit;
+    await kill();
+    exit = await waitExit(KILL_WAIT_MS);
+    if (!exit)
+      this.deps.logger.error(this.ctx(entry, { worker: handle.name }), 'worker did not exit; abandoning it');
+    return exit;
   }
 
   private onAgentEvent(entry: RunningEntry, e: AgentEvent): void {
@@ -706,6 +758,7 @@ export class Orchestrator extends EventEmitter {
       );
       return;
     }
+    if (this.draining || this.stopped) return;
     const issue = refreshed.find((i) => i.id === issueId);
     if (!issue) return this.release(issueId);
     if (isTerminal(issue, rules(config))) {

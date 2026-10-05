@@ -121,6 +121,16 @@ Rules (also in `AGENTS.md`):
       orchestrator reports it with the pod's log tail.
   - A pod that terminates before attach, or reports `ImagePullBackOff`/`ErrImagePull`, fails the
     attempt. So does a pod not running within 10 minutes. In each case the Job is deleted.
+  - Timing, modifying §8.5, §10.6 and §16.5:
+    - Stall detection (`runner.stall_timeout_ms`) starts at attach. Scheduling and image pull are
+      bounded only by the 10-minute pod-start timeout.
+    - The first handshake request may take `read_timeout_ms + 2 × hooks.timeout_ms`, because
+      `after_create` and `before_run` run in the pod before the agent starts.
+    - After a normal end the worker gets `hooks.timeout_ms + 30 s` to exit (`after_run`) before it is
+      killed. Job pods get the same termination grace.
+    - A killed worker that still has not exited after 2 × 60 s is abandoned and logged as an error,
+      which releases its slot and claim.
+  - A failing worker's exit code and pod log tail are appended to the attempt's error.
 - **Reason:** Agents need an isolated, disposable environment with their own identity. A long-lived
   in-pod worker that dials back is deferred (follow-up issue).
 - **Decided:** 2026-10-04, Tim
