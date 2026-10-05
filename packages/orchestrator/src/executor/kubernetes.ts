@@ -24,10 +24,22 @@ export interface PodInfo {
 
 /** The few Kubernetes operations the executor needs (facade over @kubernetes/client-node). */
 export interface K8sApi {
+  createSecret(
+    namespace: string,
+    secret: {
+      metadata: { name: string; labels: Record<string, string> };
+      stringData: Record<string, string>;
+    } & Record<string, unknown>,
+  ): Promise<void>;
+  /** Makes the Job own the Secret so it is garbage-collected with the Job. */
+  setSecretOwner(namespace: string, name: string, owner: { name: string; uid: string }): Promise<void>;
+  deleteSecret(namespace: string, name: string): Promise<void>;
+  /** Deletes by label without reading contents (RBAC `deletecollection`, no `list`). */
+  deleteSecrets(namespace: string, labelSelector: string): Promise<void>;
   createJob(
     namespace: string,
     job: Record<string, unknown> & { metadata: { name: string; labels: Record<string, string> } },
-  ): Promise<void>;
+  ): Promise<{ uid: string }>;
   deleteJob(namespace: string, name: string): Promise<void>;
   listJobs(namespace: string, labelSelector: string): Promise<string[]>;
   listPods(namespace: string, labelSelector: string): Promise<PodInfo[]>;
@@ -56,6 +68,31 @@ export interface KubernetesExecutorOptions {
   instance: string;
   pollIntervalMs?: number;
   podStartTimeoutMs?: number;
+  /** Per-call bound for Kubernetes API requests (default 30 s). */
+  apiTimeoutMs?: number;
+}
+
+/** Wraps every K8sApi method with a timeout so a hung apiserver cannot wedge a worker. */
+function withTimeouts(api: K8sApi, ms: number): K8sApi {
+  return new Proxy(api, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver) as unknown;
+      if (typeof value !== 'function' || prop === 'attach') return value;
+      return (...args: unknown[]) => {
+        let timer: NodeJS.Timeout | undefined;
+        return Promise.race([
+          (value as (...a: unknown[]) => Promise<unknown>).apply(target, args),
+          new Promise(
+            (_, reject) =>
+              (timer = setTimeout(
+                () => reject(new Error(`kubernetes ${String(prop)} timed out after ${ms}ms`)),
+                ms,
+              )),
+          ),
+        ]).finally(() => clearTimeout(timer));
+      };
+    },
+  });
 }
 
 /** Kubernetes label value: [A-Za-z0-9._-], max 63, alphanumeric at both ends. */
@@ -66,9 +103,29 @@ export function labelValue(s: string): string {
     .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
 }
 
+export const jobName = (runId: string) => `cumulus-${runId}`.slice(0, 63).replace(/-+$/, '');
+export const secretName = (runId: string) => `cumulus-run-${runId}`.slice(0, 63).replace(/-+$/, '');
+
+export function buildRunSecret(spec: WorkerSpec, instance: string) {
+  return {
+    apiVersion: 'v1',
+    kind: 'Secret',
+    type: 'Opaque',
+    metadata: {
+      name: secretName(spec.runId),
+      labels: {
+        [MANAGED_BY]: 'cumulus',
+        [LABEL_RUN]: labelValue(spec.runId),
+        [LABEL_INSTANCE]: labelValue(instance),
+      },
+    },
+    stringData: { ...spec.secretEnv },
+  };
+}
+
 export function buildJob(spec: WorkerSpec, worker: WorkerConfig, instance: string) {
   if (!worker.image) throw new Error('worker.image is not configured');
-  const name = `cumulus-${spec.runId}`.slice(0, 63).replace(/-+$/, '');
+  const name = jobName(spec.runId);
   const labels = {
     [MANAGED_BY]: 'cumulus',
     [LABEL_RUN]: labelValue(spec.runId),
@@ -111,7 +168,13 @@ export function buildJob(spec: WorkerSpec, worker: WorkerConfig, instance: strin
               stdin: true,
               stdinOnce: true,
               tty: false,
-              env: Object.entries(env).map(([n, value]) => ({ name: n, value })),
+              env: [
+                ...Object.entries(env).map(([n, value]) => ({ name: n, value })),
+                ...Object.keys(spec.secretEnv).map((n) => ({
+                  name: n,
+                  valueFrom: { secretKeyRef: { name: secretName(spec.runId), key: n } },
+                })),
+              ],
               ...(worker.envSecret ? { envFrom: [{ secretRef: { name: worker.envSecret } }] } : {}),
               resources: worker.resources,
               securityContext: {
@@ -142,11 +205,14 @@ export class KubernetesExecutor implements WorkerExecutor {
   private readonly pollMs: number;
   private readonly startTimeoutMs: number;
 
+  private readonly api: K8sApi;
+
   constructor(
-    private readonly api: K8sApi,
+    api: K8sApi,
     private readonly worker: WorkerConfig,
     private readonly options: KubernetesExecutorOptions,
   ) {
+    this.api = withTimeouts(api, options.apiTimeoutMs ?? 30_000);
     this.pollMs = options.pollIntervalMs ?? 1000;
     this.startTimeoutMs = options.podStartTimeoutMs ?? 600_000;
   }
@@ -160,8 +226,23 @@ export class KubernetesExecutor implements WorkerExecutor {
     assertInsideRoot(spec.workspaceRoot, spec.workspacePath);
     const job = buildJob(spec, this.worker, this.options.instance);
     const ns = this.worker.namespace;
-    await this.api.createJob(ns, job);
+    const runSecret =
+      Object.keys(spec.secretEnv).length > 0 ? buildRunSecret(spec, this.options.instance) : null;
+    // §15.3: secrets go in a per-run Secret that exists before the pod and is owned by the Job.
+    if (runSecret) await this.api.createSecret(ns, runSecret);
+    let created: { uid: string };
+    try {
+      created = await this.api.createJob(ns, job);
+    } catch (err) {
+      if (runSecret) await this.api.deleteSecret(ns, runSecret.metadata.name).catch(() => {});
+      throw err;
+    }
     const jobName = job.metadata.name;
+    if (runSecret) {
+      await this.api
+        .setSecretOwner(ns, runSecret.metadata.name, { name: jobName, uid: created.uid })
+        .catch(() => {}); // deleteOrphans removes it on the next restart if this fails
+    }
 
     let pod: PodInfo | null;
     try {
@@ -250,6 +331,7 @@ export class KubernetesExecutor implements WorkerExecutor {
     const ns = this.worker.namespace;
     const jobs = await this.api.listJobs(ns, `${MANAGED_BY}=cumulus`);
     await Promise.all(jobs.map((name) => this.api.deleteJob(ns, name)));
+    await this.api.deleteSecrets(ns, `${MANAGED_BY}=cumulus`);
     return jobs;
   }
 

@@ -32,6 +32,33 @@ describe('toPodInfo', () => {
     });
   });
 
+  it('reads the agent container status by name, not position (sidecars)', () => {
+    const info = toPodInfo({
+      status: {
+        phase: 'Running',
+        containerStatuses: [
+          {
+            name: 'istio-proxy',
+            image: 'p',
+            imageID: 'p@sha256:x',
+            ready: true,
+            restartCount: 0,
+            state: { running: {} },
+          },
+          {
+            name: 'agent',
+            image: 'a',
+            imageID: 'a@sha256:y',
+            ready: false,
+            restartCount: 0,
+            state: { terminated: { exitCode: 70 } },
+          },
+        ],
+      },
+    });
+    expect(info).toMatchObject({ containerState: 'terminated', exitCode: 70, imageId: 'a@sha256:y' });
+  });
+
   it('maps terminated and waiting states', () => {
     const terminated = toPodInfo({
       status: {

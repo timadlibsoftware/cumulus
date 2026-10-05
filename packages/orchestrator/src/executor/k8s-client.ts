@@ -19,8 +19,48 @@ export class ClientNodeK8sApi implements K8sApi {
     return kc;
   }
 
-  async createJob(namespace: string, job: Record<string, unknown>): Promise<void> {
-    await this.batch.createNamespacedJob({ namespace, body: job as k8s.V1Job });
+  async createJob(namespace: string, job: Record<string, unknown>): Promise<{ uid: string }> {
+    const created = await this.batch.createNamespacedJob({ namespace, body: job as k8s.V1Job });
+    return { uid: created.metadata?.uid ?? '' };
+  }
+
+  async createSecret(namespace: string, secret: Record<string, unknown>): Promise<void> {
+    await this.core.createNamespacedSecret({ namespace, body: secret as k8s.V1Secret });
+  }
+
+  async setSecretOwner(namespace: string, name: string, owner: { name: string; uid: string }): Promise<void> {
+    await this.core.patchNamespacedSecret(
+      {
+        name,
+        namespace,
+        body: {
+          metadata: {
+            ownerReferences: [
+              {
+                apiVersion: 'batch/v1',
+                kind: 'Job',
+                name: owner.name,
+                uid: owner.uid,
+                blockOwnerDeletion: false,
+              },
+            ],
+          },
+        },
+      },
+      k8s.setHeaderOptions('Content-Type', k8s.PatchStrategy.MergePatch),
+    );
+  }
+
+  async deleteSecret(namespace: string, name: string): Promise<void> {
+    try {
+      await this.core.deleteNamespacedSecret({ name, namespace });
+    } catch (err) {
+      if ((err as { code?: number }).code !== 404) throw err;
+    }
+  }
+
+  async deleteSecrets(namespace: string, labelSelector: string): Promise<void> {
+    await this.core.deleteCollectionNamespacedSecret({ namespace, labelSelector });
   }
 
   async deleteJob(namespace: string, name: string): Promise<void> {
@@ -38,7 +78,7 @@ export class ClientNodeK8sApi implements K8sApi {
 
   async listPods(namespace: string, labelSelector: string): Promise<PodInfo[]> {
     const list = await this.core.listNamespacedPod({ namespace, labelSelector });
-    return list.items.map(toPodInfo);
+    return list.items.map((p) => toPodInfo(p));
   }
 
   async podLogTail(namespace: string, pod: string, container: string): Promise<string> {
@@ -62,8 +102,9 @@ export class ClientNodeK8sApi implements K8sApi {
   }
 }
 
-export function toPodInfo(p: k8s.V1Pod): PodInfo {
-  const status = p.status?.containerStatuses?.[0];
+export function toPodInfo(p: k8s.V1Pod, container = 'agent'): PodInfo {
+  const statuses = p.status?.containerStatuses ?? [];
+  const status = statuses.find((c) => c.name === container) ?? statuses[0];
   const state = status?.state;
   const containerState = state?.terminated
     ? 'terminated'

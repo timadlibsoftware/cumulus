@@ -105,6 +105,7 @@ export class Orchestrator extends EventEmitter {
   private readonly completed = new Set<string>();
   private readonly details = new Map<string, IssueDebug>();
   private readonly workers = new Map<string, Promise<void>>();
+  private readonly retryWrites = new Map<string, Promise<void>>();
   private totals = { ...zero(), endedSeconds: 0 };
   private rateLimits: unknown = null;
   private configError: string | null = null;
@@ -453,7 +454,8 @@ export class Orchestrator extends EventEmitter {
           {
             name: 'cumulus',
             url: `${this.deps.internalUrl}/mcp/runs/${entry.runId}`,
-            headers: { authorization: `Bearer ${token}` },
+            // Placeholder: expanded by the runner/agent, so the token never appears in argv or pod specs.
+            headers: { authorization: 'Bearer ${CUMULUS_RUN_TOKEN}' },
           },
         ]
       : [];
@@ -477,7 +479,6 @@ export class Orchestrator extends EventEmitter {
       const env: Record<string, string> = {
         ...config.worker.env,
         CUMULUS_RUN_ID: entry.runId,
-        CUMULUS_RUN_TOKEN: token,
         CUMULUS_ISSUE_IDENTIFIER: entry.issue.identifier,
         CUMULUS_BRANCH: branch,
       };
@@ -489,6 +490,7 @@ export class Orchestrator extends EventEmitter {
         workspacePath: path,
         command: runner.buildCommand(config.runner.command, { mcpServers, model: config.runner.model }),
         env,
+        secretEnv: { CUMULUS_RUN_TOKEN: token },
         removeEnv: [...new Set([...tracker.secretEnvironmentNames(), ...ORCHESTRATOR_SECRETS])],
         hooks: {
           afterCreate: config.hooks.afterCreate,
@@ -518,6 +520,7 @@ export class Orchestrator extends EventEmitter {
           cwd: path,
           model: config.runner.model,
           mcpServers,
+          secrets: { CUMULUS_RUN_TOKEN: token },
           readTimeoutMs: config.runner.readTimeoutMs,
           // In-pod hooks (after_create, before_run) run before the agent can answer (C-3).
           startupTimeoutMs: config.runner.readTimeoutMs + 2 * config.hooks.timeoutMs,
@@ -702,7 +705,7 @@ export class Orchestrator extends EventEmitter {
       timer: null,
       error,
     };
-    void this.safe('save retry', () =>
+    this.retryWrite(issue.id, 'save retry', () =>
       this.deps.audit.saveRetry({
         issueId: issue.id,
         identifier: issue.identifier,
@@ -730,7 +733,17 @@ export class Orchestrator extends EventEmitter {
     const existing = this.retries.get(issueId);
     if (existing?.timer) clearTimeout(existing.timer);
     if (existing) this.retries.delete(issueId);
-    void this.safe('delete retry', () => this.deps.audit.deleteRetry(issueId));
+    this.retryWrite(issueId, 'delete retry', () => this.deps.audit.deleteRetry(issueId));
+  }
+
+  /** Serializes retry-queue writes per issue so a slow save cannot land after a later delete (C-5). */
+  private retryWrite(issueId: string, what: string, fn: () => Promise<void>): void {
+    const previous = this.retryWrites.get(issueId) ?? Promise.resolve();
+    const next = previous.then(() => this.safe(what, fn)).then(() => {});
+    this.retryWrites.set(issueId, next);
+    void next.finally(() => {
+      if (this.retryWrites.get(issueId) === next) this.retryWrites.delete(issueId);
+    });
   }
 
   private release(issueId: string): void {

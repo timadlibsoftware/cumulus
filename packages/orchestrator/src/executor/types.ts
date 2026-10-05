@@ -16,6 +16,8 @@ export interface WorkerSpec {
   /** Full shell command, launched as `bash -lc <command>` in the workspace (§10.1). */
   command: string;
   env: Record<string, string>;
+  /** Sensitive environment (e.g. the run token); never placed in pod specs or argv (§15.3). */
+  secretEnv: Record<string, string>;
   /** Environment names that must not reach the agent (§15.3). */
   removeEnv: string[];
   hooks: WorkerHooks;

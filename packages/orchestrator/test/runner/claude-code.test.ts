@@ -65,6 +65,20 @@ function options(events: AgentEvent[], overrides: Partial<SessionOptions> = {}):
 const runner = new ClaudeCodeRunner();
 
 describe('Claude Code stream-json runner (C-2)', () => {
+  it('§15.3 leaves ${VAR} header placeholders for Claude Code to expand, so secrets stay out of argv', () => {
+    const cmd = runner.buildCommand('claude -p', {
+      mcpServers: [
+        {
+          name: 'cumulus',
+          url: 'http://o/mcp/runs/r1',
+          headers: { authorization: 'Bearer ${CUMULUS_RUN_TOKEN}' },
+        },
+      ],
+      model: null,
+    });
+    expect(cmd).toContain('"authorization":"Bearer ${CUMULUS_RUN_TOKEN}"');
+  });
+
   it('C-11 appends the MCP config, model and permission mode to the launch command', () => {
     const cmd = runner.buildCommand(
       'claude -p --input-format stream-json --output-format stream-json --verbose',

@@ -142,7 +142,6 @@ describe('worker attempts (§16.5)', () => {
     expect(spec.workspacePath).toMatch(/symphony_workspaces\/AB_1-[0-9a-f]{16}$/);
     expect(spec.env).toMatchObject({
       CUMULUS_RUN_ID: 'run-1',
-      CUMULUS_RUN_TOKEN: 'token-1',
       CUMULUS_INTERNAL_URL: 'http://cumulus.agents.svc:8080',
       CUMULUS_ISSUE_IDENTIFIER: 'AB#1',
     });
@@ -152,9 +151,13 @@ describe('worker attempts (§16.5)', () => {
       {
         name: 'cumulus',
         url: 'http://cumulus.agents.svc:8080/mcp/runs/run-1',
-        headers: { authorization: 'Bearer token-1' },
+        headers: { authorization: 'Bearer ${CUMULUS_RUN_TOKEN}' },
       },
     ]);
+    // §15.3: the run token travels as a secret, never in plain env, args or headers.
+    expect(h.runner.options[0]!.secrets).toEqual({ CUMULUS_RUN_TOKEN: 'token-1' });
+    expect(spec.secretEnv).toEqual({ CUMULUS_RUN_TOKEN: 'token-1' });
+    expect(spec.env).not.toHaveProperty('CUMULUS_RUN_TOKEN');
     expect(h.registry.registered).toEqual(['run-1']);
   });
 
@@ -600,6 +603,21 @@ describe('Cumulus lifecycle (C-4, C-5)', () => {
     await h.flush();
     expect(h.audit.retries.get('1')).toMatchObject({ attempt: 1, identifier: 'AB#1' });
     await h.advance(10000);
+    expect(h.audit.retries.has('1')).toBe(false);
+  });
+
+  it('C-5 retry queue writes for an issue are applied in order', async () => {
+    const h = await started(harness({ issues: [makeIssue({ id: '1' })] }));
+    const save = h.audit.saveRetry.bind(h.audit);
+    h.audit.saveRetry = async (e) => {
+      await new Promise((r) => setTimeout(r, 20_000)); // slow database write
+      await save(e);
+    };
+    h.runner.fail('1'); // schedules a retry (slow save)
+    await h.flush();
+    await h.advance(10_000); // retry fires and dispatches (fast delete)
+    await h.advance(20_000);
+    expect(h.executor.specs).toHaveLength(2);
     expect(h.audit.retries.has('1')).toBe(false);
   });
 

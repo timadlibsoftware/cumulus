@@ -137,6 +137,16 @@ Rules (also in `AGENTS.md`):
     - A killed worker that still has not exited after 2 × 60 s is abandoned and logged as an error,
       which releases its slot and claim.
   - A failing worker's exit code and pod log tail are appended to the attempt's error.
+  - Secrets (§15.3):
+    - The run token goes in a per-run Secret `cumulus-run-<run_id>`. It is created before the Job,
+      then owned by it, so it is garbage-collected with the Job. The container reads it through
+      `valueFrom.secretKeyRef`.
+    - MCP headers carry a `${CUMULUS_RUN_TOKEN}` placeholder. The ACP runner expands it over the
+      protocol, and Claude Code expands it from its environment. The token never appears in a pod
+      spec or in argv.
+    - The orchestrator's Role allows `create/patch/delete/deletecollection` on secrets but not
+      `get`/`list`, so it cannot read other secrets in the namespace.
+  - Kubernetes API calls are bounded (30 s each), and the agent container is selected by name.
 - **Reason:** Agents need an isolated, disposable environment with their own identity. A long-lived
   in-pod worker that dials back is deferred (follow-up issue).
 - **Decided:** 2026-10-04, Tim

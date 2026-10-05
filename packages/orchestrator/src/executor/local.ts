@@ -47,6 +47,9 @@ export function runHook(
  */
 export class LocalExecutor implements WorkerExecutor {
   readonly kind = 'local';
+
+  constructor(private readonly options: { killGraceMs?: number } = {}) {}
+
   private readonly running = new Map<
     string,
     { child: ChildProcessWithoutNullStreams; spec: WorkerSpec; startedAt: string }
@@ -65,7 +68,7 @@ export class LocalExecutor implements WorkerExecutor {
       createdNow = true;
     }
 
-    const env: NodeJS.ProcessEnv = { ...process.env, ...spec.env };
+    const env: NodeJS.ProcessEnv = { ...process.env, ...spec.env, ...spec.secretEnv };
     for (const name of spec.removeEnv) delete env[name];
 
     if (createdNow && spec.hooks.afterCreate) {
@@ -81,6 +84,8 @@ export class LocalExecutor implements WorkerExecutor {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
     });
+    // Writes to an agent that already exited must not crash the orchestrator (EPIPE).
+    child.stdin.on('error', () => {});
     const name = `local-${spec.runId}`;
     this.running.set(name, { child, spec, startedAt: new Date().toISOString() });
     let killed = false;
@@ -107,11 +112,16 @@ export class LocalExecutor implements WorkerExecutor {
       imageDigest: async () => null,
       kill: async () => {
         killed = true;
-        try {
-          process.kill(-child.pid!, 'SIGTERM');
-        } catch {
-          /* already gone */
-        }
+        const signal = (sig: NodeJS.Signals) => {
+          try {
+            process.kill(-child.pid!, sig);
+          } catch {
+            /* already gone */
+          }
+        };
+        signal('SIGTERM');
+        const escalate = setTimeout(() => signal('SIGKILL'), this.options.killGraceMs ?? 5000);
+        void exited.finally(() => clearTimeout(escalate));
       },
     };
   }

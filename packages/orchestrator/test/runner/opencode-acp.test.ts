@@ -42,7 +42,14 @@ function options(events: AgentEvent[], overrides: Partial<SessionOptions> = {}):
   return {
     cwd: '/workspace/AB_1-x',
     model: null,
-    mcpServers: [{ name: 'cumulus', url: 'http://orch/mcp/runs/r1', headers: { authorization: 'Bearer t' } }],
+    mcpServers: [
+      {
+        name: 'cumulus',
+        url: 'http://orch/mcp/runs/r1',
+        headers: { authorization: 'Bearer ${CUMULUS_RUN_TOKEN}' },
+      },
+    ],
+    secrets: { CUMULUS_RUN_TOKEN: 't' },
     readTimeoutMs: 500,
     turnTimeoutMs: 500,
     onEvent: (e) => events.push(e),

@@ -40,6 +40,8 @@ export interface SessionOptions {
   cwd: string;
   model: string | null;
   mcpServers: McpServerSpec[];
+  /** Values for `${NAME}` placeholders in MCP headers (runners that send headers over the protocol). */
+  secrets?: Record<string, string>;
   readTimeoutMs: number;
   /** Timeout for the first handshake request; covers in-pod hooks that run before the agent starts. */
   startupTimeoutMs?: number;

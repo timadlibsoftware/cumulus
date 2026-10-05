@@ -18,6 +18,7 @@ function spec(r: string, overrides: Partial<WorkerSpec> = {}): WorkerSpec {
     workspacePath: join(r, 'AB_1'),
     command: 'cat',
     env: { CUMULUS_RUN_ID: 'run1' },
+    secretEnv: {},
     removeEnv: [],
     hooks: { afterCreate: null, beforeRun: null, afterRun: null, timeoutMs: 2000 },
     ...overrides,
@@ -116,12 +117,39 @@ describe('LocalExecutor', () => {
     }
   });
 
+  it('§15.3 passes secret env to the local agent', async () => {
+    const r = await root();
+    const h = await exec.start(
+      spec(r, { command: 'echo "$CUMULUS_RUN_TOKEN"', secretEnv: { CUMULUS_RUN_TOKEN: 's3cret' } }),
+    );
+    expect((await output(h)).out.trim()).toBe('s3cret');
+  });
+
   it('kill terminates the agent', async () => {
     const r = await root();
     const h = await exec.start(spec(r, { command: 'sleep 30' }));
     await h.kill();
     const exit = await h.exited;
     expect(exit).toMatchObject({ reason: 'killed' });
+  });
+
+  it('escalates to SIGKILL when the agent ignores SIGTERM', async () => {
+    const r = await root();
+    const ex = new LocalExecutor({ killGraceMs: 200 });
+    const h = await ex.start(spec(r, { command: "trap '' TERM; sleep 30" }));
+    await new Promise((res) => setTimeout(res, 100));
+    await h.kill();
+    const started = Date.now();
+    expect(await h.exited).toMatchObject({ reason: 'killed' });
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('survives writes to an agent that already exited (EPIPE)', async () => {
+    const r = await root();
+    const h = await exec.start(spec(r, { command: 'exit 0' }));
+    await h.exited;
+    h.stdin.write('late\n');
+    await new Promise((res) => setTimeout(res, 50));
   });
 
   it('reports no image digest for local processes', async () => {

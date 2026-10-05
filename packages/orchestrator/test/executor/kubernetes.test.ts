@@ -21,7 +21,8 @@ function spec(overrides: Partial<WorkerSpec> = {}): WorkerSpec {
     workspaceRoot: '/tmp/symphony_workspaces',
     workspacePath: '/tmp/symphony_workspaces/AB_123-abc',
     command: 'opencode acp',
-    env: { CUMULUS_RUN_ID: 'r', CUMULUS_RUN_TOKEN: 'tok' },
+    env: { CUMULUS_RUN_ID: 'r' },
+    secretEnv: { CUMULUS_RUN_TOKEN: 'tok' },
     removeEnv: [],
     hooks: { afterCreate: 'echo hi', beforeRun: null, afterRun: 'echo bye', timeoutMs: 60000 },
     ...overrides,
@@ -30,6 +31,11 @@ function spec(overrides: Partial<WorkerSpec> = {}): WorkerSpec {
 
 class FakeK8s implements K8sApi {
   jobs = new Map<string, { labels: Record<string, string>; body: unknown }>();
+  secrets = new Map<
+    string,
+    { labels: Record<string, string>; data: Record<string, string>; owner: string | null }
+  >();
+  calls: string[] = [];
   pods = new Map<string, PodInfo>();
   deleted: string[] = [];
   attached: { pod: string; stdin: Readable; stdout: Writable; stderr: Writable; close: () => void }[] = [];
@@ -45,10 +51,39 @@ class FakeK8s implements K8sApi {
     createdAt: '2026-10-04T00:00:00Z',
   });
 
+  async createSecret(
+    _ns: string,
+    secret: {
+      metadata: { name: string; labels: Record<string, string> };
+      stringData: Record<string, string>;
+    },
+  ) {
+    this.calls.push(`createSecret:${secret.metadata.name}`);
+    this.secrets.set(secret.metadata.name, {
+      labels: secret.metadata.labels,
+      data: secret.stringData,
+      owner: null,
+    });
+  }
+  async setSecretOwner(_ns: string, name: string, owner: { name: string; uid: string }) {
+    this.calls.push(`setSecretOwner:${name}:${owner.name}:${owner.uid}`);
+    const s = this.secrets.get(name);
+    if (s) s.owner = owner.name;
+  }
+  async deleteSecret(_ns: string, name: string) {
+    this.calls.push(`deleteSecret:${name}`);
+    this.secrets.delete(name);
+  }
+  async deleteSecrets(_ns: string, selector: string) {
+    const [k, v] = selector.split('=');
+    for (const [name, s] of this.secrets) if (s.labels[k!] === v) this.secrets.delete(name);
+  }
   async createJob(_ns: string, job: { metadata: { name: string; labels: Record<string, string> } }) {
+    this.calls.push(`createJob:${job.metadata.name}`);
     this.jobs.set(job.metadata.name, { labels: job.metadata.labels, body: job });
     const pod = this.podForJob(job.metadata.name, job.metadata.labels);
     if (pod) this.pods.set(pod.name, pod);
+    return { uid: `uid-${job.metadata.name}` };
   }
   async deleteJob(_ns: string, name: string) {
     this.deleted.push(name);
@@ -115,15 +150,25 @@ describe('KubernetesExecutor (C-3)', () => {
       args: ['bash', '-lc', 'opencode acp'],
     });
     expect(c.envFrom).toEqual([{ secretRef: { name: 'cumulus-agent-env' } }]);
-    const env = Object.fromEntries(c.env.map((e: { name: string; value: string }) => [e.name, e.value]));
+    const env = Object.fromEntries(
+      c.env
+        .filter((e: { value?: string }) => e.value !== undefined)
+        .map((e: { name: string; value: string }) => [e.name, e.value]),
+    );
     expect(env).toMatchObject({
       CUMULUS_WORKSPACE: '/tmp/symphony_workspaces/AB_123-abc',
       CUMULUS_WORKSPACE_ROOT: '/tmp/symphony_workspaces',
       CUMULUS_HOOK_AFTER_CREATE: 'echo hi',
       CUMULUS_HOOK_AFTER_RUN: 'echo bye',
       CUMULUS_HOOK_TIMEOUT_MS: '60000',
-      CUMULUS_RUN_TOKEN: 'tok',
     });
+    expect(c.env).toContainEqual({
+      name: 'CUMULUS_RUN_TOKEN',
+      valueFrom: {
+        secretKeyRef: { name: 'cumulus-run-0192f3a4-aaaa-bbbb-cccc-1234567890ab', key: 'CUMULUS_RUN_TOKEN' },
+      },
+    });
+    expect(JSON.stringify(job)).not.toContain('"tok"');
     expect(env).not.toHaveProperty('CUMULUS_HOOK_BEFORE_RUN');
     expect(c.securityContext).toMatchObject({ runAsNonRoot: true, allowPrivilegeEscalation: false });
     expect(c.resources).toEqual({ requests: { cpu: '1' } });
@@ -208,6 +253,33 @@ describe('KubernetesExecutor (C-3)', () => {
     expect(k8s.deleted).toHaveLength(1);
   });
 
+  it('§15.3 stores secret env in a per-run Secret created before the Job and owned by it', async () => {
+    const k8s = new FakeK8s();
+    const ex = new KubernetesExecutor(k8s, worker, opts);
+    await ex.start(spec());
+    const name = 'cumulus-run-0192f3a4-aaaa-bbbb-cccc-1234567890ab';
+    expect(k8s.secrets.get(name)).toMatchObject({
+      data: { CUMULUS_RUN_TOKEN: 'tok' },
+      labels: { 'app.kubernetes.io/managed-by': 'cumulus' },
+    });
+    const job = 'cumulus-0192f3a4-aaaa-bbbb-cccc-1234567890ab';
+    expect(k8s.calls.slice(0, 3)).toEqual([
+      `createSecret:${name}`,
+      `createJob:${job}`,
+      `setSecretOwner:${name}:${job}:uid-${job}`,
+    ]);
+  });
+
+  it('§15.3 deletes the run Secret when the Job cannot be created', async () => {
+    const k8s = new FakeK8s();
+    k8s.createJob = async () => {
+      throw new Error('quota');
+    };
+    const ex = new KubernetesExecutor(k8s, worker, opts);
+    await expect(ex.start(spec())).rejects.toThrow('quota');
+    expect(k8s.secrets.size).toBe(0);
+  });
+
   it('kill deletes the Job and resolves exited as killed', async () => {
     const k8s = new FakeK8s();
     const ex = new KubernetesExecutor(k8s, worker, opts);
@@ -234,6 +306,14 @@ describe('KubernetesExecutor (C-3)', () => {
     };
     await expect(h.kill()).rejects.toThrow('apiserver 503');
     expect(closed).toBe(true);
+  });
+
+  it('bounds Kubernetes API calls so a hung apiserver cannot wedge kill()', async () => {
+    const k8s = new FakeK8s();
+    const ex = new KubernetesExecutor(k8s, worker, { ...opts, apiTimeoutMs: 50 });
+    const h = await ex.start(spec());
+    k8s.deleteJob = () => new Promise(() => {});
+    await expect(h.kill()).rejects.toThrow(/timed out/);
   });
 
   it('C-3 reports a failing container exit with its log tail', async () => {
@@ -263,9 +343,15 @@ describe('KubernetesExecutor (C-3)', () => {
     k8s.jobs.set('cumulus-old-1', { labels: { 'app.kubernetes.io/managed-by': 'cumulus' }, body: {} });
     k8s.jobs.set('cumulus-old-2', { labels: { 'app.kubernetes.io/managed-by': 'cumulus' }, body: {} });
     k8s.jobs.set('other', { labels: { app: 'x' }, body: {} });
+    k8s.secrets.set('cumulus-run-old', {
+      labels: { 'app.kubernetes.io/managed-by': 'cumulus' },
+      data: {},
+      owner: null,
+    });
     const ex = new KubernetesExecutor(k8s, worker, opts);
     expect((await ex.deleteOrphans()).sort()).toEqual(['cumulus-old-1', 'cumulus-old-2']);
     expect(k8s.jobs.has('other')).toBe(true);
+    expect(k8s.secrets.size).toBe(0);
   });
 
   it('lists worker pods', async () => {

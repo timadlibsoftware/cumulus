@@ -86,7 +86,13 @@ class AcpSession implements AgentSession {
           type: 'http',
           name: s.name,
           url: s.url,
-          headers: Object.entries(s.headers).map(([name, value]) => ({ name, value })),
+          headers: Object.entries(s.headers).map(([name, value]) => ({
+            name,
+            value: value.replace(
+              /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+              (_m, v: string) => this.options.secrets?.[v] ?? '',
+            ),
+          })),
         })),
       },
       timeout,

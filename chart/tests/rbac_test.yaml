@@ -31,7 +31,7 @@ tests:
           path: automountServiceAccountToken
           value: false
 
-  - it: C-3 Role grants exactly the Job, pod, attach, log and event verbs
+  - it: C-3 Role grants exactly the Job, pod, attach, log, event and run-Secret verbs
     template: rbac.yaml
     documentSelector:
       path: kind
@@ -58,6 +58,9 @@ tests:
             - apiGroups: ['']
               resources: [events]
               verbs: [list, watch]
+            - apiGroups: ['']
+              resources: [secrets]
+              verbs: [create, patch, delete, deletecollection]
 
   - it: C-3 binds the Role to the orchestrator SA only
     template: rbac.yaml
