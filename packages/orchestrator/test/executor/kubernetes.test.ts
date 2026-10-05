@@ -1,4 +1,4 @@
-import { PassThrough, type Readable, type Writable } from 'node:stream';
+import type { Readable, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { KubernetesExecutor, buildJob, type K8sApi, type PodInfo } from '../../src/executor/kubernetes.js';
 import type { WorkerSpec } from '../../src/executor/types.js';
@@ -80,6 +80,7 @@ const opts = { instance: 'inst-1', pollIntervalMs: 5, podStartTimeoutMs: 200 };
 
 describe('KubernetesExecutor (C-3)', () => {
   it('builds a single-attempt Job with stdin attach, identity and labels', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- asserting on a raw manifest
     const job = buildJob(spec(), worker, 'inst-1') as any;
     expect(job.metadata.name).toBe('cumulus-0192f3a4-aaaa-bbbb-cccc-1234567890ab');
     expect(job.metadata.labels).toMatchObject({
