@@ -1,0 +1,36 @@
+{
+  "name": "@cumulus/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cumulus": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@azure/identity": "^4.13.3",
+    "@cumulus/shared": "workspace:*",
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/static": "^9.1.5",
+    "@kubernetes/client-node": "^2.0.0",
+    "drizzle-orm": "^0.45.3",
+    "fastify": "^5.12.5",
+    "liquidjs": "^10.30.0",
+    "openid-client": "^6.8.8",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^12.2.0",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.23.15"
+  }
+}

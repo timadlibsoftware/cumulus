@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+packages/orchestrator/public/
+# Plan documents are not committed (see AGENTS.md)
+PLAN*.md
+*.plan.md
