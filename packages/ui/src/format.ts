@@ -1,3 +1,23 @@
+import type { RunStatus } from '@cumulus/shared';
+
+export type Severity = 'success' | 'info' | 'warn' | 'danger' | 'secondary';
+
+const severities: Record<RunStatus, Severity> = {
+  claimed: 'info',
+  pod_created: 'info',
+  running: 'info',
+  retrying: 'warn',
+  completed: 'success',
+  failed: 'danger',
+  interrupted: 'secondary',
+  canceled: 'secondary',
+};
+
+/** PrimeVue Tag severity for a run status. */
+export function statusSeverity(status: RunStatus): Severity {
+  return severities[status] ?? 'secondary';
+}
+
 export function formatDateTime(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString() : '—';
 }

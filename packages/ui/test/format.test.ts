@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { formatDateTime, formatDuration, formatNumber, formatRelative } from '@/format';
+import { formatDateTime, formatDuration, formatNumber, formatRelative, statusSeverity } from '@/format';
+
+describe('statusSeverity', () => {
+  it('maps run status to a Tag severity', () => {
+    expect(statusSeverity('completed')).toBe('success');
+    expect(statusSeverity('failed')).toBe('danger');
+    expect(statusSeverity('retrying')).toBe('warn');
+    expect(statusSeverity('running')).toBe('info');
+    expect(statusSeverity('claimed')).toBe('info');
+    expect(statusSeverity('canceled')).toBe('secondary');
+  });
+});
 
 describe('format', () => {
   it('formatDateTime uses the browser locale and shows a dash for null', () => {

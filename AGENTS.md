@@ -98,10 +98,13 @@ src/main.ts              PrimeVue (darkModeSelector '.app-dark'), router, global
 src/router.ts            `sections`: the single list behind routes and the sidebar menu
 src/api.ts               Only place that calls fetch. 401 -> /auth/login?returnTo=<path>
 src/format.ts            Date, number, duration formatting
-src/composables/         useTheme (System/Light/Dark), useLiveState (SSE + polling fallback)
+src/composables/         useTheme (System/Light/Dark), useLiveState (SSE + polling fallback),
+                         useResource (load on mount, error state)
+src/components/          SettingField (C-6 field semantics), IssueLink
 src/layout/              Sakai shell: AppLayout, AppTopbar, AppSidebar, AppMenu, useLayout
-src/views/               One view per section
-test/                    *.test.ts; helpers.ts mounts with PrimeVue (theme 'none') + memory router
+src/views/               Dashboard, Runs, Queue, Workers, Settings (one per sidebar section)
+test/                    *.test.ts; helpers.ts mounts with PrimeVue (theme 'none') + memory router;
+                         setup.ts provides a default matchMedia for jsdom
 ```
 
 - **Theme:** `useTheme()` is the only code that touches the `app-dark` class on `<html>`. Modes are
@@ -111,6 +114,12 @@ test/                    *.test.ts; helpers.ts mounts with PrimeVue (theme 'none
   directly; add a method to `api` with a test instead.
 - **Live data:** `useLiveState()` owns the single EventSource on `/api/v1/events` and stops with
   its component. On SSE error it closes the stream and polls `/api/v1/state` every 10s.
+- **Settings (C-6):** rendered generically from `GET /api/v1/settings`; never hard-code a key. A
+  field without an override is empty, with the inherited value (`workflow_value ?? default_value`)
+  as placeholder. An override shows its value, a `modified` Tag, a Reset link (`DELETE`) and who set
+  it. Saving an empty field does nothing. After any change the list is reloaded from the API.
+- **Dashboard:** "failing" means `GET /api/v1/runs?status=failed&limit=10`, reloaded when a run
+  leaves the running set.
 - `.vue` files are formatted by Prettier but not linted by ESLint; `vue-tsc` type-checks them.
 
 ## Conventions
