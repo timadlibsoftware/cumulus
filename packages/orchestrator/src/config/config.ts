@@ -57,6 +57,8 @@ export interface ServiceConfig {
     activeDeadlineSeconds: number;
     ttlSecondsAfterFinished: number;
     resources: ResourceRequirements;
+    /** Plain (non-secret) environment for every worker, e.g. OPENCODE_CONFIG_CONTENT (C-3). */
+    env: Record<string, string>;
   };
   server: { port: number | null; host: string };
   shutdown: { drainTimeoutMs: number };
@@ -113,6 +115,19 @@ function stringList(obj: Raw, key: string, path: string): string[] {
     throw new ConfigError(`${path}.${key} must be a list of strings`);
   }
   return value as string[];
+}
+
+function stringMap(obj: Raw, key: string, path: string): Record<string, string> {
+  const value = obj[key];
+  if (value === undefined || value === null) return {};
+  if (
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.values(value).some((v) => typeof v !== 'string')
+  ) {
+    throw new ConfigError(`${path}.${key} must be a map of strings`);
+  }
+  return { ...(value as Record<string, string>) };
 }
 
 /** `$VAR` indirection for values that are exactly `$NAME` (§6.1). */
@@ -238,6 +253,7 @@ export function resolveConfig(raw: Raw, ctx: ResolveContext): ServiceConfig {
       activeDeadlineSeconds: int(worker, 'active_deadline_seconds', 'worker', 14400, positive),
       ttlSecondsAfterFinished: int(worker, 'ttl_seconds_after_finished', 'worker', 3600, nonNegative),
       resources: (worker['resources'] as ResourceRequirements | undefined) ?? DEFAULT_RESOURCES,
+      env: stringMap(worker, 'env', 'worker'),
     },
     server: {
       port:

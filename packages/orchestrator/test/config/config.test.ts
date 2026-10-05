@@ -115,6 +115,16 @@ describe('resolveConfig', () => {
     });
   });
 
+  it('C-3 worker.env passes plain environment values to every worker', () => {
+    const c = resolveConfig(
+      { ...minimal, worker: { env: { OPENCODE_CONFIG_CONTENT: '{"model":"litellm/x"}' } } },
+      ctx,
+    );
+    expect(c.worker.env).toEqual({ OPENCODE_CONFIG_CONTENT: '{"model":"litellm/x"}' });
+    expect(resolveConfig(minimal, ctx).worker.env).toEqual({});
+    expect(() => resolveConfig({ ...minimal, worker: { env: { A: 1 } } }, ctx)).toThrow(ConfigError);
+  });
+
   it('C-3 worker namespace falls back to agents', () => {
     expect(resolveConfig(minimal, ctx).worker.namespace).toBe('agents');
   });

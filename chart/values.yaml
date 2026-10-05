@@ -81,6 +81,10 @@ workflow: |
     kind: opencode
   worker:
     executor: kubernetes
+    env:
+      # OpenCode runs through the in-cluster LiteLLM proxy, which enforces the overall spend cap.
+      # Inline config outranks a cloned repository's own opencode.json.
+      OPENCODE_CONFIG_CONTENT: '{"provider":{"litellm":{"npm":"@ai-sdk/openai-compatible","name":"LiteLLM","options":{"baseURL":"http://litellm.litellm.svc.cluster.local:4000/v1","apiKey":"{env:LITELLM_API_KEY}"},"models":{"claude-sonnet-5":{"name":"Claude Sonnet 5"},"claude-haiku-4-5":{"name":"Claude Haiku 4.5"}}}},"model":"litellm/claude-sonnet-5"}'
   shutdown:
     drain_timeout_ms: 300000
   ---

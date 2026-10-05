@@ -27,6 +27,16 @@ tests:
           path: data["WORKFLOW.md"]
           pattern: 'azure_devops_move_card'
 
+  - it: C-2 default workflow routes OpenCode through the in-cluster LiteLLM proxy
+    template: configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: 'OPENCODE_CONFIG_CONTENT: .*"baseURL":"http://litellm\.litellm\.svc\.cluster\.local:4000/v1","apiKey":"\{env:LITELLM_API_KEY\}"'
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: '"model":"litellm/claude-sonnet-5"'
+
   - it: C-1 default workflow targets the DevOps backlog, opt-in tag and columns
     template: configmap.yaml
     asserts:

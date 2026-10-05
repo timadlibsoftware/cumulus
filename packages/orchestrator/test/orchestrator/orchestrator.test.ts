@@ -158,6 +158,21 @@ describe('worker attempts (§16.5)', () => {
     expect(h.registry.registered).toEqual(['run-1']);
   });
 
+  it('C-3 passes worker.env to workers without letting it override run identity', async () => {
+    const h = await started(
+      harness({
+        workflow: {
+          worker: { executor: 'local', env: { OPENCODE_CONFIG_CONTENT: '{}', CUMULUS_RUN_ID: 'evil' } },
+        },
+        issues: [makeIssue({ id: '1' })],
+      }),
+    );
+    expect(h.executor.specs[0]!.env).toMatchObject({
+      OPENCODE_CONFIG_CONTENT: '{}',
+      CUMULUS_RUN_ID: 'run-1',
+    });
+  });
+
   it('§15.3 removes tracker secret env names from the worker environment', async () => {
     const h = harness({ issues: [makeIssue({ id: '1' })] });
     h.tracker.secretEnvironmentNames = () => ['ADO_PAT'];
@@ -454,6 +469,30 @@ describe('observability (§13)', () => {
     const h = await started(harness({ issues: [makeIssue({ id: '1' })] }));
     const dispatched = h.logs.find((l) => /dispatch/.test(l.msg))!;
     expect(dispatched.obj).toMatchObject({ issue_id: '1', issue_identifier: 'AB#1', run_id: 'run-1' });
+  });
+
+  it('C-5 agent events are logged at info with run, issue and session ids (Loki)', async () => {
+    const h = await started(harness({ issues: [makeIssue({ id: '1' })] }));
+    h.runner.emit('1', { event: 'notification', message: 'editing main.tf' });
+    const line = h.logs.find(
+      (l) => l.level === 'info' && (l.obj as { event?: string }).event === 'notification',
+    )!;
+    expect(line.obj).toMatchObject({
+      run_id: 'run-1',
+      issue_id: '1',
+      issue_identifier: 'AB#1',
+      session_id: 'thread-1-1',
+      message: 'editing main.tf',
+    });
+  });
+
+  it('C-5 worker stderr lines are logged with the run id (Loki)', async () => {
+    const h = await started(harness({ issues: [makeIssue({ id: '1' })] }));
+    h.executor.handles[0]!.stderr.write('hook: cloning\nsecond line\n');
+    await h.flush();
+    const lines = h.logs.filter((l) => (l.obj as { stream?: string }).stream === 'stderr');
+    expect(lines.map((l) => l.msg)).toEqual(['hook: cloning', 'second line']);
+    expect(lines[0]!.obj).toMatchObject({ run_id: 'run-1', issue_identifier: 'AB#1' });
   });
 
   it('emits state and agent events to observers', async () => {

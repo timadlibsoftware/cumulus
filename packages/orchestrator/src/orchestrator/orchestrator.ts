@@ -11,6 +11,7 @@ import { EventEmitter } from 'node:events';
 import type { ServiceConfig } from '../config/config.js';
 import type { WorkerHandle } from '../executor/types.js';
 import { continuationPrompt, renderPrompt } from '../prompt.js';
+import { readLines } from '../runner/ndjson.js';
 import type { AgentSession, McpServerSpec } from '../runner/types.js';
 import type { Tracker } from '../tracker/types.js';
 import { branchName, workspaceKey, workspacePath } from '../workspace.js';
@@ -457,6 +458,7 @@ export class Orchestrator extends EventEmitter {
     try {
       const path = workspacePath(config.workspace.root, entry.workspaceKey);
       const env: Record<string, string> = {
+        ...config.worker.env,
         CUMULUS_RUN_ID: entry.runId,
         CUMULUS_RUN_TOKEN: token,
         CUMULUS_ISSUE_IDENTIFIER: entry.issue.identifier,
@@ -477,6 +479,10 @@ export class Orchestrator extends EventEmitter {
           afterRun: config.hooks.afterRun,
           timeoutMs: config.hooks.timeoutMs,
         },
+      });
+      readLines(entry.handle.stderr, {
+        maxLineBytes: 64 * 1024,
+        onLine: (line) => this.deps.logger.info(this.ctx(entry, { stream: 'stderr' }), line),
       });
       if (entry.stopReason) throw new Error(`stopped (${entry.stopReason})`);
       const digest = await entry.handle.imageDigest().catch(() => null);
@@ -577,8 +583,9 @@ export class Orchestrator extends EventEmitter {
       debug.recentEvents.push({ at: e.timestamp, event: e.event, message: e.message ?? null });
       if (debug.recentEvents.length > 50) debug.recentEvents.shift();
     }
-    this.deps.logger.debug(
-      this.ctx(entry, { session_id: entry.sessionId, event: e.event, message: e.message }),
+    // Full agent event stream to stdout for Loki (C-5); one line per event, tagged with the run.
+    this.deps.logger.info(
+      this.ctx(entry, { session_id: entry.sessionId, event: e.event, message: e.message, usage: e.usage }),
       `agent event=${e.event}`,
     );
     this.emit('agent_event', { run_id: entry.runId, issue_identifier: entry.issue.identifier, event: e });

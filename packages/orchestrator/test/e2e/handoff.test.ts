@@ -7,7 +7,6 @@ import { resolveConfig } from '../../src/config/config.js';
 import { LocalExecutor } from '../../src/executor/local.js';
 import { buildInternalServer } from '../../src/http/internal.js';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
-import { noopAudit } from '../../src/orchestrator/ports.js';
 import { RunRegistryImpl } from '../../src/registry.js';
 import { OpenCodeAcpRunner } from '../../src/runner/opencode-acp.js';
 import { createAzureDevOpsTracker } from '../../src/tracker/azure-devops.js';
@@ -27,7 +26,13 @@ describe('end to end: dispatch → agent → MCP hand-off → release (C-2, C-3,
     const ado = new FakeAdo([adoItem(42, 'Dev', { 'System.Title': 'Rotate the cert' })]);
     const tracker = createAzureDevOpsTracker(
       {
-        provider: { organization: 'adlibsoftware', project: 'AdlibCTP', team: 'DevOps', area_path: 'AdlibCTP\\DevOps', iteration_path: 'AdlibCTP\\Backlogs\\DevOps' },
+        provider: {
+          organization: 'adlibsoftware',
+          project: 'AdlibCTP',
+          team: 'DevOps',
+          area_path: 'AdlibCTP\\DevOps',
+          iteration_path: 'AdlibCTP\\Backlogs\\DevOps',
+        },
         activeStates: ['Backlog', 'Dev', 'Test'],
         terminalStates: ['Closed'],
       },
@@ -40,7 +45,12 @@ describe('end to end: dispatch → agent → MCP hand-off → release (C-2, C-3,
 
     const config = resolveConfig(
       {
-        tracker: { kind: 'azure_devops', active_states: ['Backlog', 'Dev', 'Test'], terminal_states: ['Closed'], required_labels: ['cumulus'] },
+        tracker: {
+          kind: 'azure_devops',
+          active_states: ['Backlog', 'Dev', 'Test'],
+          terminal_states: ['Closed'],
+          required_labels: ['cumulus'],
+        },
         workspace: { root },
         worker: { executor: 'local' },
         runner: { kind: 'opencode', command: `node ${AGENT}` },
@@ -50,7 +60,14 @@ describe('end to end: dispatch → agent → MCP hand-off → release (C-2, C-3,
     const audit = new RecordingAudit();
     const events: AgentEvent[] = [];
     const orchestrator = new Orchestrator({
-      workflow: { current: () => ({ config, promptTemplate: 'Fix {{ issue.title }} on {{ cumulus.branch }}', error: null }), refresh: async () => {} },
+      workflow: {
+        current: () => ({
+          config,
+          promptTemplate: 'Fix {{ issue.title }} on {{ cumulus.branch }}',
+          error: null,
+        }),
+        refresh: async () => {},
+      },
       trackerFor: () => tracker,
       runnerFor: () => new OpenCodeAcpRunner(),
       executorFor: () => new LocalExecutor(),
@@ -72,7 +89,10 @@ describe('end to end: dispatch → agent → MCP hand-off → release (C-2, C-3,
 
     // The agent moved the card through the host-side tool; the orchestrator saw Review and ended normally.
     expect(ado.items.get(42)!.fields['System.BoardColumn']).toBe('Review');
-    expect(audit.ended[0]).toMatchObject({ status: 'completed', tokens: { input_tokens: 1000, output_tokens: 200, total_tokens: 1200 } });
+    expect(audit.ended[0]).toMatchObject({
+      status: 'completed',
+      tokens: { input_tokens: 1000, output_tokens: 200, total_tokens: 1200 },
+    });
     expect(events.map((e) => e.message)).toContain('agent_message_chunk: tools=2 moved=true');
     expect(orchestrator.snapshot().codex_totals.total_tokens).toBe(1200);
 
