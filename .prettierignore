@@ -4,3 +4,4 @@ chart/templates/
 packages/orchestrator/public/
 **/dist/
 **/coverage/
+.claude/
