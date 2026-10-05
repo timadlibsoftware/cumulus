@@ -15,3 +15,8 @@ spec:
       port: 8080
       targetPort: http
       protocol: TCP
+    # Agent-facing MCP tools and git tokens (C-10, C-11); never routed by the ingress.
+    - name: internal
+      port: 8081
+      targetPort: internal
+      protocol: TCP

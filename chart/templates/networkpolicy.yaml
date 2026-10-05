@@ -1,5 +1,5 @@
-# Only worker pods (internal git-token and MCP endpoints) and Traefik (UI/API) may reach the
-# orchestrator. Kubelet probes come from the node and are allowed by Calico regardless.
+# Traefik may reach the UI/API port; only worker pods may reach the internal port (git tokens and
+# MCP tools, C-10/C-11). Kubelet probes come from the node and are allowed by Calico regardless.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -14,12 +14,16 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/managed-by: cumulus
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: traefik
       ports:
         - protocol: TCP
           port: 8080
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: cumulus
+      ports:
+        - protocol: TCP
+          port: 8081

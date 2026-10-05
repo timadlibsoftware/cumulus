@@ -29,7 +29,8 @@ COPY --from=build /app/packages/orchestrator/package.json ./packages/orchestrato
 COPY --from=build /app/packages/orchestrator/node_modules ./packages/orchestrator/node_modules
 COPY --from=build /app/packages/orchestrator/dist ./packages/orchestrator/dist
 COPY --from=build /app/packages/orchestrator/public ./packages/orchestrator/public
+COPY --from=build /app/packages/orchestrator/drizzle ./packages/orchestrator/drizzle
 # The `node` user of the base image; numeric so Kubernetes runAsNonRoot can verify it.
 USER 1000:1000
-EXPOSE 8080
+EXPOSE 8080 8081
 ENTRYPOINT ["/usr/bin/tini", "--", "node", "packages/orchestrator/dist/cli.js"]

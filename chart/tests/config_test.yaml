@@ -131,7 +131,7 @@ tests:
                   metadataPolicy: None,
                 }
 
-  - it: exposes a ClusterIP service on 8080 named cumulus
+  - it: exposes a ClusterIP service with the public port 8080 and the internal port 8081
     template: service.yaml
     asserts:
       - equal:
@@ -141,8 +141,10 @@ tests:
           path: spec.type
           value: ClusterIP
       - equal:
-          path: spec.ports[0].port
-          value: 8080
+          path: spec.ports
+          value:
+            - { name: http, port: 8080, targetPort: http, protocol: TCP }
+            - { name: internal, port: 8081, targetPort: internal, protocol: TCP }
 
   - it: routes cumulus.adlibsys.com through traefik
     template: ingress.yaml
@@ -159,7 +161,7 @@ tests:
             name: cumulus
             port: { number: 8080 }
 
-  - it: admits only worker pods and traefik on 8080
+  - it: C-11 admits traefik on the public port and worker pods only on the internal port
     template: networkpolicy.yaml
     asserts:
       - equal:
@@ -169,12 +171,16 @@ tests:
           path: spec.ingress
           value:
             - from:
-                - podSelector:
-                    matchLabels:
-                      app.kubernetes.io/managed-by: cumulus
                 - namespaceSelector:
                     matchLabels:
                       kubernetes.io/metadata.name: traefik
               ports:
                 - protocol: TCP
                   port: 8080
+            - from:
+                - podSelector:
+                    matchLabels:
+                      app.kubernetes.io/managed-by: cumulus
+              ports:
+                - protocol: TCP
+                  port: 8081

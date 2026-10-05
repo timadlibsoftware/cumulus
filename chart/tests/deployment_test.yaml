@@ -63,7 +63,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].args
-          value: ['/config/WORKFLOW.md', '--port', '8080', '--host', '0.0.0.0']
+          value: ['/config/WORKFLOW.md', '--port', '8080', '--internal-port', '8081', '--host', '0.0.0.0']
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content:
@@ -122,7 +122,7 @@ tests:
           content: { name: CUMULUS_PUBLIC_URL, value: 'https://cumulus.adlibsys.com' }
       - contains:
           path: spec.template.spec.containers[0].env
-          content: { name: CUMULUS_INTERNAL_URL, value: 'http://cumulus.agents.svc.cluster.local:8080' }
+          content: { name: CUMULUS_INTERNAL_URL, value: 'http://cumulus.agents.svc.cluster.local:8081' }
       - contains:
           path: spec.template.spec.containers[0].env
           content: { name: CUMULUS_DB_HOST, value: adlib-cloudops-prod-psql.postgres.database.azure.com }
