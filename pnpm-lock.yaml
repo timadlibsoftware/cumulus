@@ -14,6 +14,9 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.19.1
+      bats:
+        specifier: ^1.13.0
+        version: 1.13.0
       eslint:
         specifier: ^10.12.0
         version: 10.12.0(jiti@2.7.0)
@@ -138,6 +141,8 @@ importers:
       vue-tsc:
         specifier: ^3.3.12
         version: 3.3.12(typescript@6.0.3)
+
+  worker/convert: {}
 
 packages:
 
@@ -1571,6 +1576,10 @@ packages:
 
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
+
+  bats@1.13.0:
+    resolution: {integrity: sha512-giSYKGTOcPZyJDbfbTtzAedLcNWdjCLbXYU3/MwPnjyvDXzu6Dgw8d2M+8jHhZXSmsCMSQqCp+YBsJ603UO4vQ==}
+    hasBin: true
 
   bcrypt-pbkdf@1.0.2:
     resolution: {integrity: sha512-qeFIXtP4MSoi6NLqO12WfqARWWuCKi2Rn/9hJLEmtB5yTNr9DqFWkJRCf2qShWzPeAMRnOgCrq0sg/KLv5ES9w==}
@@ -4666,6 +4675,8 @@ snapshots:
       bare-path: 3.1.2
 
   base64-js@1.5.1: {}
+
+  bats@1.13.0: {}
 
   bcrypt-pbkdf@1.0.2:
     dependencies:

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Print a fresh GitHub App installation token for this run (CUMULUS-SPEC C-10).
+# The orchestrator serves it at $CUMULUS_INTERNAL_URL/internal/runs/$CUMULUS_RUN_ID/git-token,
+# authenticated with the per-run bearer secret. The body is JSON `{"token": "..."}` or plain text.
+set -euo pipefail
+
+for var in CUMULUS_INTERNAL_URL CUMULUS_RUN_ID CUMULUS_RUN_TOKEN; do
+  if [[ -z "${!var:-}" ]]; then
+    echo "cumulus-github-token: $var is not set" >&2
+    exit 1
+  fi
+done
+
+body="$(curl --fail --silent --show-error --max-time 30 --retry 3 \
+  --header "Authorization: Bearer ${CUMULUS_RUN_TOKEN}" \
+  "${CUMULUS_INTERNAL_URL%/}/internal/runs/${CUMULUS_RUN_ID}/git-token")"
+
+if [[ "$body" == \{* ]]; then
+  token="$(jq -r '.token // empty' <<< "$body")"
+else
+  token="$body"
+fi
+
+if [[ -z "$token" ]]; then
+  echo "cumulus-github-token: orchestrator returned no token" >&2
+  exit 1
+fi
+printf '%s\n' "$token"

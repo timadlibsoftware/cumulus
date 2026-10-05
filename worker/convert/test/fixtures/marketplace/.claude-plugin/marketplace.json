@@ -1,0 +1,45 @@
+{
+  "name": "fixture-skills",
+  "owner": { "name": "Adlibsoftware" },
+  "plugins": [
+    {
+      "name": "devops-skills",
+      "source": "./",
+      "strict": false,
+      "skills": ["./skills/alpha", "./skills/beta"],
+      "mcpServers": {
+        "azure": {
+          "alwaysAllow": ["monitor"],
+          "args": ["-y", "@azure/mcp@latest", "server", "start"],
+          "command": "npx",
+          "gallery": true,
+          "type": "stdio"
+        },
+        "azure-devops": {
+          "args": ["-y", "@azure-devops/mcp@latest", "adlibsoftware", "-a", "azcli"],
+          "command": "npx",
+          "disabled": false
+        },
+        "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" },
+        "github": {
+          "headers": { "Authorization": "Bearer ${GITHUB_TOKEN}" },
+          "type": "http",
+          "url": "https://api.githubcopilot.com/mcp/"
+        },
+        "grafana": {
+          "args": [],
+          "command": "mcp-grafana",
+          "env": {
+            "GRAFANA_SERVICE_ACCOUNT_TOKEN": "${GRAFANA_SERVICE_ACCOUNT_TOKEN}",
+            "GRAFANA_URL": "https://grafana.adlibsys.com"
+          }
+        },
+        "swsd": {
+          "args": ["-y", "@adlibsoftware/mcp-swsd"],
+          "command": "npx",
+          "env": { "SWSD_TOKEN": "${SWSD_TOKEN}" }
+        }
+      }
+    }
+  ]
+}

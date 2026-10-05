@@ -1,0 +1,4 @@
+{
+  "@azure/mcp": { "version": "3.0.0-beta.49", "bin": "azmcp" },
+  "@azure-devops/mcp": { "version": "2.10.0", "bin": "mcp-server-azuredevops" }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@cumulus/worker-convert",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Converts the CloudOps-Skills Claude Code marketplace into OpenCode config for the worker image",
+  "bin": {
+    "cumulus-convert-skills": "./src/cli.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ."
+  }
+}
