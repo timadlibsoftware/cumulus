@@ -191,14 +191,13 @@ resource "azuread_app_role_assignment" "cumulus_operators" {
 
 External Secrets reads these through `ClusterSecretStore/adlib-aks-kv`:
 
-| Key Vault secret          | Kubernetes Secret / key                      | Value                                  |
-| ------------------------- | -------------------------------------------- | -------------------------------------- |
-| `CumulusOidcClientSecret` | `cumulus` / `CUMULUS_OIDC_CLIENT_SECRET`     | Entra app client secret (step 4)       |
-| `CumulusSessionKey`       | `cumulus` / `CUMULUS_SESSION_SECRET`         | `openssl rand -base64 48`              |
-| `CumulusGithubAppId`      | `cumulus` / `CUMULUS_GITHUB_APP_ID`          | GitHub App ID (step 5)                 |
-| `CumulusGithubAppKey`     | `cumulus` / `CUMULUS_GITHUB_APP_PRIVATE_KEY` | GitHub App private key, PEM            |
-| `CumulusLitellmKey`       | `cumulus-agent-env` / `LITELLM_API_KEY`      | LiteLLM virtual key for agent runs     |
-| `CumulusAnthropicKey`     | `cumulus-agent-env` / `ANTHROPIC_API_KEY`    | Anthropic API key for Claude Code runs |
+| Key Vault secret          | Kubernetes Secret / key                                         | Value                                                         |
+| ------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------- |
+| `CumulusOidcClientSecret` | `cumulus` / `CUMULUS_OIDC_CLIENT_SECRET`                        | Entra app client secret (step 4)                              |
+| `CumulusSessionKey`       | `cumulus` / `CUMULUS_SESSION_SECRET`                            | `openssl rand -base64 48`                                     |
+| `CumulusGithubAppId`      | `cumulus` / `CUMULUS_GITHUB_APP_ID`                             | GitHub App ID (step 5)                                        |
+| `CumulusGithubAppKey`     | `cumulus` / `CUMULUS_GITHUB_APP_PRIVATE_KEY`                    | GitHub App private key, PEM                                   |
+| `CumulusLitellmKey`       | `cumulus-agent-env` / `LITELLM_API_KEY`, `ANTHROPIC_AUTH_TOKEN` | LiteLLM virtual key for agent runs (OpenCode and Claude Code) |
 
 Agent env entries come from `agentEnv` in `chart/values.yaml`; add more there (for example tokens
 the CloudOps-Skills MCP servers read, listed in the worker image's `/opt/cumulus/UNMAPPED.md`).

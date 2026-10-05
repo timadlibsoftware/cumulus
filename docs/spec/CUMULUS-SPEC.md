@@ -33,11 +33,13 @@ Rules (also in `AGENTS.md`):
     `System.State`. The DevOps Stories board maps Backlog, Dev and Review all to `Active`, so
     `System.State` cannot tell them apart.
   - Active states: `Backlog`, `Dev`, `Test`.
-  - Terminal states: `Closed`.
+  - Terminal states: `Done`, `Closed`. Reaching either stops the run and deletes unmerged
+    `cumulus/*` branches (C-9).
   - Dispatch is opt-in: `required_labels: [cumulus]`, matched against work item tags.
   - The full profile is in [`docs/adapters/azure-devops.md`](../adapters/azure-devops.md).
 - **Reason:** Upstream ships no Azure DevOps adapter. It defines only the generic interface.
-- **Decided:** 2026-10-04, Tim. Scope, board-column source, active columns and opt-in tag.
+- **Decided:** 2026-10-04, Tim. Scope, board-column source, active columns and opt-in tag. Done made
+  terminal 2026-10-05, Tim.
 - **Conformance impact:** §17.3 contract suite runs against this adapter with recorded HTTP fixtures.
 
 ## C-2: Protocol-neutral agent runner (OpenCode, Claude Code, later OMP)
@@ -70,6 +72,10 @@ Rules (also in `AGENTS.md`):
     user-input request, so `turn_input_required` never occurs. Stop reasons `end_turn`, `max_tokens`
     and `max_turn_requests` complete the turn; `cancelled` → `turn_cancelled`; anything else →
     `turn_failed`.
+  - Both agents run through the in-cluster LiteLLM proxy, which enforces the overall spend cap
+    (decided 2026-10-05, Tim). OpenCode uses `worker.env.OPENCODE_CONFIG_CONTENT`. Claude Code uses
+    `ANTHROPIC_BASE_URL`, with the LiteLLM key as `ANTHROPIC_AUTH_TOKEN` and the
+    `ANTHROPIC_DEFAULT_*_MODEL` variables mapped to LiteLLM model names.
   - Claude Code: `--permission-mode bypassPermissions`, `--mcp-config` and `--model` are appended to
     `runner.command` at launch. `runner.read_timeout_ms` does not apply, because the process sends
     nothing before the first prompt.
@@ -283,7 +289,10 @@ Rules (also in `AGENTS.md`):
 
 ## Pending decisions
 
-None of these block the MVP. Upstream default behavior applies until decided.
+None.
 
-- **Done column.** Done is neither active nor terminal (§8.5: stop without cleanup). Should it be
-  terminal, so unmerged branches are deleted?
+## Deferred past the MVP
+
+- **Agents reacting to PR review comments while an item is in Review.** Review is not an active
+  state (C-11), so reviewer feedback is not picked up automatically. A human moves the card back to
+  Dev to get another agent pass. Revisit after the MVP (Tim, 2026-10-05).

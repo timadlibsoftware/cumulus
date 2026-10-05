@@ -104,7 +104,7 @@ export function parseProvider(
     iterationPath: typeof p['iteration_path'] === 'string' ? p['iteration_path'] : null,
     workItemTypes: optionalStringList(p, 'work_item_types', ['User Story', 'Bug']),
     agentColumns: optionalStringList(p, 'agent_columns', ['Dev', 'Test', 'Review']),
-    blockerDoneStates: optionalStringList(p, 'blocker_done_states', ['Closed', 'Removed', 'Done']),
+    blockerDoneStates: optionalStringList(p, 'blocker_done_states', ['Done', 'Closed', 'Removed']),
     maxResults,
     pat,
     patEnvName,
@@ -263,7 +263,10 @@ export class AzureDevOpsTracker implements Tracker {
 
   private async blockerStates(items: RawWorkItem[]): Promise<Map<string, string | null>> {
     const known = new Map<string, string | null>(
-      items.map((i) => [String(i.id), nonEmptyString(i.fields['System.State'])]),
+      items.map((i) => [
+        String(i.id),
+        nonEmptyString(i.fields['System.BoardColumn']) ?? nonEmptyString(i.fields['System.State']),
+      ]),
     );
     const missing = new Set<number>();
     for (const item of items) {
@@ -275,7 +278,10 @@ export class AzureDevOpsTracker implements Tracker {
     }
     if (missing.size > 0) {
       for (const item of await this.fetchBatch([...missing])) {
-        known.set(String(item.id), nonEmptyString(item.fields['System.State']));
+        known.set(
+          String(item.id),
+          nonEmptyString(item.fields['System.BoardColumn']) ?? nonEmptyString(item.fields['System.State']),
+        );
       }
     }
     return known;

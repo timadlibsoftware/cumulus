@@ -45,8 +45,9 @@ externalSecrets:
 agentEnv:
   - name: LITELLM_API_KEY
     key: CumulusLitellmKey
-  - name: ANTHROPIC_API_KEY
-    key: CumulusAnthropicKey
+  # Claude Code authenticates to LiteLLM with the same key (Authorization: Bearer).
+  - name: ANTHROPIC_AUTH_TOKEN
+    key: CumulusLitellmKey
 
 resources:
   requests:
@@ -72,7 +73,7 @@ workflow: |
       agent_columns: [Dev, Test, Review]
     required_labels: [cumulus]
     active_states: [Backlog, Dev, Test]
-    terminal_states: [Closed]
+    terminal_states: [Done, Closed]
   polling:
     interval_ms: 30000
   agent:
@@ -84,6 +85,12 @@ workflow: |
     env:
       # OpenCode runs through the in-cluster LiteLLM proxy, which enforces the overall spend cap.
       # Inline config outranks a cloned repository's own opencode.json.
+      # Claude Code also runs through LiteLLM (Anthropic Messages format; no /v1 suffix).
+      ANTHROPIC_BASE_URL: http://litellm.litellm.svc.cluster.local:4000
+      ANTHROPIC_DEFAULT_SONNET_MODEL: claude-sonnet-5
+      ANTHROPIC_DEFAULT_OPUS_MODEL: claude-opus-5
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: claude-haiku-4-5
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
       OPENCODE_CONFIG_CONTENT: '{"provider":{"litellm":{"npm":"@ai-sdk/openai-compatible","name":"LiteLLM","options":{"baseURL":"http://litellm.litellm.svc.cluster.local:4000/v1","apiKey":"{env:LITELLM_API_KEY}"},"models":{"claude-sonnet-5":{"name":"Claude Sonnet 5"},"claude-haiku-4-5":{"name":"Claude Haiku 4.5"}}}},"model":"litellm/claude-sonnet-5"}'
   shutdown:
     drain_timeout_ms: 300000

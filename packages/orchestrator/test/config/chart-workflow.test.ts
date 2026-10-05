@@ -20,6 +20,7 @@ describe('chart default WORKFLOW.md', () => {
       env: { CUMULUS_WORKER_IMAGE: 'img:1' },
     });
     expect(config.tracker.activeStates).toEqual(['Backlog', 'Dev', 'Test']);
+    expect(config.tracker.terminalStates).toEqual(['Done', 'Closed']);
     expect(config.runner.kind).toBe('opencode');
     expect(JSON.parse(config.worker.env['OPENCODE_CONFIG_CONTENT']!)).toMatchObject({
       model: 'litellm/claude-sonnet-5',

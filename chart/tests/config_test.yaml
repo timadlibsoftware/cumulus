@@ -37,6 +37,19 @@ tests:
           path: data["WORKFLOW.md"]
           pattern: '"model":"litellm/claude-sonnet-5"'
 
+  - it: C-2 default workflow routes Claude Code through LiteLLM with LiteLLM model names
+    template: configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: 'ANTHROPIC_BASE_URL: http://litellm\.litellm\.svc\.cluster\.local:4000\n'
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: 'ANTHROPIC_DEFAULT_SONNET_MODEL: claude-sonnet-5'
+      - matchRegex:
+          path: data["WORKFLOW.md"]
+          pattern: 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"'
+
   - it: C-1 default workflow targets the DevOps backlog, opt-in tag and columns
     template: configmap.yaml
     asserts:
@@ -132,10 +145,10 @@ tests:
                   decodingStrategy: None,
                   metadataPolicy: None,
                 }
-            - secretKey: ANTHROPIC_API_KEY
+            - secretKey: ANTHROPIC_AUTH_TOKEN
               remoteRef:
                 {
-                  key: CumulusAnthropicKey,
+                  key: CumulusLitellmKey,
                   conversionStrategy: Default,
                   decodingStrategy: None,
                   metadataPolicy: None,

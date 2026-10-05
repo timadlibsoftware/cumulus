@@ -136,12 +136,21 @@ describe('azure_devops adapter', () => {
     const byId = Object.fromEntries(issues.map((i) => [i.id, i]));
     expect(byId['1']).toMatchObject({
       dispatchable: false,
-      blocked_by: [{ id: '2', identifier: 'AB#2', state: 'Active' }],
+      blocked_by: [{ id: '2', identifier: 'AB#2', state: 'Dev' }],
     });
     expect(byId['3']).toMatchObject({
       dispatchable: true,
       blocked_by: [{ id: '4', identifier: 'AB#4', state: 'Closed' }],
     });
+  });
+
+  it('C-1 a predecessor in the Done column no longer blocks (board column, not System.State)', async () => {
+    const fake = new FakeAdo([
+      adoItem(1, 'Dev', {}, [predecessor(2)]),
+      adoItem(2, 'Done', { 'System.State': 'Resolved' }),
+    ]);
+    const [issue] = await build(fake).fetchIssuesByIds(['1']);
+    expect(issue).toMatchObject({ dispatchable: true, blocked_by: [{ id: '2', state: 'Done' }] });
   });
 
   it('§11.1 id refresh omits items that moved out of scope', async () => {

@@ -9,20 +9,20 @@ Code: `packages/orchestrator/src/tracker/azure-devops.ts`.
 
 ## `tracker.provider` keys
 
-| Key                   | Required | Default                   | Notes                                                                |
-| --------------------- | -------- | ------------------------- | -------------------------------------------------------------------- |
-| `organization`        | yes      |                           | e.g. `adlibsoftware`                                                 |
-| `project`             | yes      |                           | e.g. `AdlibCTP`                                                      |
-| `team`                | yes      |                           | Board owner, e.g. `DevOps`                                           |
-| `board`               | no       | `Stories`                 | Board used by the move-card tool                                     |
-| `area_path`           | yes      |                           | Scope; matched with `UNDER` (includes children)                      |
-| `iteration_path`      | no       | none                      | Scope; matched with `UNDER`                                          |
-| `work_item_types`     | no       | `[User Story, Bug]`       | Scope                                                                |
-| `agent_columns`       | no       | `[Dev, Test, Review]`     | Columns the agent may move a card to                                 |
-| `blocker_done_states` | no       | `[Closed, Removed, Done]` | Predecessor `System.State` values that no longer block               |
-| `max_results`         | no       | `20000`                   | WIQL `$top`; a result at the cap fails with `tracker_pagination`     |
-| `base_url`            | no       | `https://dev.azure.com`   | Testing only                                                         |
-| `pat`                 | no       | none                      | `$VAR` only. If set but resolving to empty: `missing_tracker_secret` |
+| Key                   | Required | Default                   | Notes                                                                       |
+| --------------------- | -------- | ------------------------- | --------------------------------------------------------------------------- |
+| `organization`        | yes      |                           | e.g. `adlibsoftware`                                                        |
+| `project`             | yes      |                           | e.g. `AdlibCTP`                                                             |
+| `team`                | yes      |                           | Board owner, e.g. `DevOps`                                                  |
+| `board`               | no       | `Stories`                 | Board used by the move-card tool                                            |
+| `area_path`           | yes      |                           | Scope; matched with `UNDER` (includes children)                             |
+| `iteration_path`      | no       | none                      | Scope; matched with `UNDER`                                                 |
+| `work_item_types`     | no       | `[User Story, Bug]`       | Scope                                                                       |
+| `agent_columns`       | no       | `[Dev, Test, Review]`     | Columns the agent may move a card to                                        |
+| `blocker_done_states` | no       | `[Done, Closed, Removed]` | Predecessor states (board column, else `System.State`) that no longer block |
+| `max_results`         | no       | `20000`                   | WIQL `$top`; a result at the cap fails with `tracker_pagination`            |
+| `base_url`            | no       | `https://dev.azure.com`   | Testing only                                                                |
+| `pat`                 | no       | none                      | `$VAR` only. If set but resolving to empty: `missing_tracker_secret`        |
 
 A missing or empty required key fails with `invalid_tracker_config`.
 
@@ -48,22 +48,22 @@ identity must be an Azure DevOps user with read access to the project and write 
 
 ## Normalization
 
-| Issue field                 | Source                                                                                                                                                           |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                        | `System.Id` as a string                                                                                                                                          |
-| `identifier`                | `AB#<id>` (the same syntax GitHub↔ADO linking uses)                                                                                                              |
-| `title`                     | `System.Title` (required)                                                                                                                                        |
-| `description`               | `System.Description`, HTML→text, followed by `Acceptance criteria:` and `Microsoft.VSTS.Common.AcceptanceCriteria` when present                                  |
-| `priority`                  | `Microsoft.VSTS.Common.Priority` if it is an integer, else null                                                                                                  |
-| `state`                     | **`System.BoardColumn`**, falling back to `System.State` for items not on a board (e.g. Removed). Provider spelling is preserved.                                |
-| `branch_name`               | null. Cumulus derives the branch itself (C-10).                                                                                                                  |
-| `url`                       | `{base}/{org}/{project}/_workitems/edit/{id}`                                                                                                                    |
-| `assignee_id`               | `System.AssignedTo.uniqueName`, else its `id`                                                                                                                    |
-| `labels`                    | `System.Tags` split on `;`, trimmed, lowercased, blanks dropped, de-duplicated                                                                                   |
-| `blocked_by`                | `System.LinkTypes.Dependency-Reverse` (Predecessor) relations: `{id, identifier: AB#id, state: System.State}`. `state` is null if the predecessor can't be read. |
-| `dispatchable`              | In scope **and** no predecessor whose state is known and not in `blocker_done_states`. A predecessor of unknown state does not block.                            |
-| `created_at` / `updated_at` | `System.CreatedDate` / `System.ChangedDate` as RFC 3339, null if unparsable                                                                                      |
-| `native_ref`                | `{work_item_id, rev, work_item_type, area_path, project}` (no secrets)                                                                                           |
+| Issue field                 | Source                                                                                                                                                                                                     |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                        | `System.Id` as a string                                                                                                                                                                                    |
+| `identifier`                | `AB#<id>` (the same syntax GitHub↔ADO linking uses)                                                                                                                                                        |
+| `title`                     | `System.Title` (required)                                                                                                                                                                                  |
+| `description`               | `System.Description`, HTML→text, followed by `Acceptance criteria:` and `Microsoft.VSTS.Common.AcceptanceCriteria` when present                                                                            |
+| `priority`                  | `Microsoft.VSTS.Common.Priority` if it is an integer, else null                                                                                                                                            |
+| `state`                     | **`System.BoardColumn`**, falling back to `System.State` for items not on a board (e.g. Removed). Provider spelling is preserved.                                                                          |
+| `branch_name`               | null. Cumulus derives the branch itself (C-10).                                                                                                                                                            |
+| `url`                       | `{base}/{org}/{project}/_workitems/edit/{id}`                                                                                                                                                              |
+| `assignee_id`               | `System.AssignedTo.uniqueName`, else its `id`                                                                                                                                                              |
+| `labels`                    | `System.Tags` split on `;`, trimmed, lowercased, blanks dropped, de-duplicated                                                                                                                             |
+| `blocked_by`                | `System.LinkTypes.Dependency-Reverse` (Predecessor) relations: `{id, identifier: AB#id, state}`, where `state` is the board column, else `System.State`. `state` is null if the predecessor can't be read. |
+| `dispatchable`              | In scope **and** no predecessor whose state is known and not in `blocker_done_states`. A predecessor of unknown state does not block.                                                                      |
+| `created_at` / `updated_at` | `System.CreatedDate` / `System.ChangedDate` as RFC 3339, null if unparsable                                                                                                                                |
+| `native_ref`                | `{work_item_id, rev, work_item_type, area_path, project}` (no secrets)                                                                                                                                     |
 
 **Malformed records:** a record is malformed when the title is empty or it has neither a board column
 nor a state. State-list calls omit and log malformed records. ID refresh fails with
